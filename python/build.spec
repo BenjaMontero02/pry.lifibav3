@@ -17,23 +17,25 @@ for package_name in ("insightface", "onnxruntime"):
     binaries += package_binaries
     hiddenimports += package_hiddenimports
 
-# Bundle the buffalo_l models so a packaged (offline) kiosk never needs to
+# Bundle the face models so a packaged (offline) kiosk never needs to
 # download them. At runtime, face_index_service._resolve_insightface_root()
 # points FaceAnalysis(root=...) to <sys._MEIPASS>/insightface_models, which
-# expects the models under <root>/models/buffalo_l.
-buffalo_l_models_dir = os.path.expanduser(
-    os.path.join("~", ".insightface", "models", "buffalo_l")
+# expects the models under <root>/models/<FACE_MODEL_NAME>.
+# Keep in sync with FACE_MODEL_NAME in app/services/face_index_service.py.
+FACE_MODEL_NAME = "antelopev2"
+face_models_dir = os.path.expanduser(
+    os.path.join("~", ".insightface", "models", FACE_MODEL_NAME)
 )
-if os.path.isdir(buffalo_l_models_dir):
+if os.path.isdir(face_models_dir):
     datas.append(
-        (buffalo_l_models_dir, os.path.join("insightface_models", "models", "buffalo_l"))
+        (face_models_dir, os.path.join("insightface_models", "models", FACE_MODEL_NAME))
     )
 else:
     sys.stderr.write(
-        "WARNING: buffalo_l models not found at {path}. They will NOT be bundled, "
+        "WARNING: {model} models not found at {path}. They will NOT be bundled, "
         "and the packaged app will try to download them on first use (this fails "
         "offline). Run the app once in development so InsightFace downloads the "
-        "models, then rebuild.\n".format(path=buffalo_l_models_dir)
+        "models, then rebuild.\n".format(model=FACE_MODEL_NAME, path=face_models_dir)
     )
 
 a = Analysis(

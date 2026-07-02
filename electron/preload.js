@@ -9,6 +9,7 @@ const INVOKE_CHANNELS = new Set([
   "sourcepad:rescan",
   "index:get-status",
   "index:clear",
+  "photos:open-external",
   "player:set-preview-photos",
   "player:get-preview-photos"
 ]);

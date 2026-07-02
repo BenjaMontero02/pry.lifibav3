@@ -3,13 +3,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 export const PHOTOS_PAGE_SIZE = 160;
 const SOURCEPAD_RELOAD_DEBOUNCE_MS = 350;
 const SOURCEPAD_WATCH_STATUS_CHANNEL = "sourcepad:get-watch-status";
-export const PHOTO_STATUS_FILTERS = Object.freeze(["all", "pending", "indexed", "no_faces", "error"]);
+export const PHOTO_STATUS_FILTERS = Object.freeze([
+  "all",
+  "pending",
+  "indexed",
+  "no_faces",
+  "faces_filtered",
+  "error"
+]);
 
 export const EMPTY_PHOTO_STATUS_COUNTS = Object.freeze({
   all: 0,
   pending: 0,
   indexed: 0,
   no_faces: 0,
+  faces_filtered: 0,
   error: 0
 });
 
@@ -587,6 +595,24 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     };
   }, []);
 
+  const handleOpenPhoto = useCallback(
+    async (photo) => {
+      if (!photo?.path) {
+        return;
+      }
+
+      try {
+        const result = await desktopApi.invoke("photos:open-external", { path: photo.path });
+        if (result?.browserFallback) {
+          setPhotosError("Abrir fotos solo esta disponible dentro de la app de escritorio.");
+        }
+      } catch (error) {
+        setPhotosError(`No se pudo abrir la foto: ${String(error.message || error)}`);
+      }
+    },
+    [desktopApi]
+  );
+
   const enrichedPhotosMeta = useMemo(() => {
     const currentWatchStatus = normalizeSourcepadWatchStatus(sourcepadWatchStatus);
     return {
@@ -618,6 +644,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     handlePhotosSearchSubmit,
     handleClearPhotosSearch,
     handlePhotosScroll,
-    handleShowMorePhotos
+    handleShowMorePhotos,
+    handleOpenPhoto
   };
 }

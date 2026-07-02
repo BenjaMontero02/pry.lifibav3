@@ -2,7 +2,7 @@ const path = require("path");
 const { pathToFileURL, fileURLToPath } = require("url");
 const fs = require("fs");
 const { createHash } = require("crypto");
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, screen } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, screen, shell } = require("electron");
 const Database = require("better-sqlite3");
 const { createPythonBridge } = require("./python-bridge");
 
@@ -60,7 +60,7 @@ const THUMBNAIL_PREWARM_CONCURRENCY = 2;
 const THUMBNAIL_PREWARM_RESCAN_LIMIT = 240;
 const THUMBNAIL_PREWARM_PROGRESS_INTERVAL_MS = 600;
 const SQLITE_BIND_CHUNK_SIZE = 900;
-const PHOTO_STATUS_FILTERS = new Set(["all", "pending", "indexed", "no_faces", "error"]);
+const PHOTO_STATUS_FILTERS = new Set(["all", "pending", "indexed", "no_faces", "faces_filtered", "error"]);
 const SOURCE_IMAGE_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
@@ -119,7 +119,12 @@ function getPhotoFilterStatusFromIndexRow(statusRow) {
   if (hasPhotoIndexError(statusRow) || indexedStatus === "error" || indexedStatus === "unreadable") {
     return "error";
   }
-  if (indexedStatus === "indexed" || indexedStatus === "no_faces" || indexedStatus === "pending") {
+  if (
+    indexedStatus === "indexed" ||
+    indexedStatus === "no_faces" ||
+    indexedStatus === "faces_filtered" ||
+    indexedStatus === "pending"
+  ) {
     return indexedStatus;
   }
   return "pending";
@@ -1030,6 +1035,7 @@ function createPhotoIndexSummaryFromGroupedRows(rows, totalPhotos = 0) {
       pending: pendingPhotos,
       indexed: byStatus.indexed || 0,
       no_faces: byStatus.no_faces || 0,
+      faces_filtered: byStatus.faces_filtered || 0,
       error: errorPhotos + unreadablePhotos
     }
   };
@@ -1087,6 +1093,7 @@ function createEmptyPhotoIndexSummary() {
       pending: 0,
       indexed: 0,
       no_faces: 0,
+      faces_filtered: 0,
       error: 0
     }
   };
@@ -1144,6 +1151,7 @@ function collectPhotoStatusMatches(photos, statusByPath, statusFilter) {
     pending: 0,
     indexed: 0,
     no_faces: 0,
+    faces_filtered: 0,
     error: 0
   };
   const matchingPhotos = [];
@@ -1428,6 +1436,20 @@ function registerIpc() {
   });
 
   ipcMain.handle("index:clear", async () => clearFaceIndex());
+
+  ipcMain.handle("photos:open-external", async (_event, payload) => {
+    const photoPath = typeof payload?.path === "string" ? payload.path : "";
+    const result = validateSourceImagePath(photoPath);
+    if (!result.ok) {
+      throw new Error("La foto no existe o esta fuera de la carpeta sourcepad configurada.");
+    }
+
+    const openError = await shell.openPath(result.realPhotoPath);
+    if (openError) {
+      throw new Error(openError);
+    }
+    return { opened: true, path: result.realPhotoPath };
+  });
 
   ipcMain.handle("player:set-preview-photos", async (_event, payload) => {
     const photos = sanitizePlayerPreviewPhotos(payload?.photos);

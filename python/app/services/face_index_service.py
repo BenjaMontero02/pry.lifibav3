@@ -7,6 +7,11 @@ import numpy as np
 from insightface.app import FaceAnalysis
 
 EMBEDDING_DIMENSION = 512
+# antelopev2 (ResNet100 @ Glint360K) reconoce mejor que buffalo_l
+# (ResNet50 @ WebFace600K); mismo embedding de 512 dims. Cambiar el modelo
+# invalida los indices existentes: index_photos fuerza rebuild si el
+# manifest registra otro modelo.
+FACE_MODEL_NAME = "antelopev2"
 DEFAULT_DET_SIZE = (640, 640)
 _face_analyzer = None
 _face_analyzer_det_size = None
@@ -101,9 +106,10 @@ def load_index(index_path):
 def _resolve_insightface_root():
     """Return the bundled InsightFace root when running frozen, else None.
 
-    build.spec packages ``~/.insightface/models/buffalo_l`` under
-    ``insightface_models/models/buffalo_l`` inside the PyInstaller bundle.
-    FaceAnalysis(root=...) expects the models under ``<root>/models/<name>``.
+    build.spec packages ``~/.insightface/models/<FACE_MODEL_NAME>`` under
+    ``insightface_models/models/<FACE_MODEL_NAME>`` inside the PyInstaller
+    bundle. FaceAnalysis(root=...) expects the models under
+    ``<root>/models/<name>``.
     """
     if not getattr(sys, "frozen", False):
         return None
@@ -113,7 +119,7 @@ def _resolve_insightface_root():
         return None
 
     bundled_root = os.path.join(bundle_dir, "insightface_models")
-    if os.path.isdir(os.path.join(bundled_root, "models", "buffalo_l")):
+    if os.path.isdir(os.path.join(bundled_root, "models", FACE_MODEL_NAME)):
         return bundled_root
     return None
 
@@ -137,7 +143,7 @@ def get_face_analyzer(det_size=DEFAULT_DET_SIZE):
             _face_analyzer_det_size = det_size
         return _face_analyzer
 
-    analyzer_kwargs = {"name": "buffalo_l", "providers": ["CPUExecutionProvider"]}
+    analyzer_kwargs = {"name": FACE_MODEL_NAME, "providers": ["CPUExecutionProvider"]}
     insightface_root = _resolve_insightface_root()
     if insightface_root:
         analyzer_kwargs["root"] = insightface_root

@@ -92,6 +92,9 @@ const browserDesktopApi = {
     if (channel === "index:clear") {
       return { cleared: false, browserFallback: true };
     }
+    if (channel === "photos:open-external") {
+      return { opened: false, browserFallback: true };
+    }
     if (channel === "player:get-preview-photos") {
       return { photos: [], updatedAt: null };
     }

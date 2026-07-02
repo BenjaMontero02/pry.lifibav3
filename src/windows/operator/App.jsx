@@ -82,6 +82,7 @@ export default function App() {
               onClearPhotosSearch={photos.handleClearPhotosSearch}
               onPhotosScroll={photos.handlePhotosScroll}
               onShowMorePhotos={photos.handleShowMorePhotos}
+              onOpenPhoto={photos.handleOpenPhoto}
             />
           ) : activeView === "scan-player" ? (
             <ScanPlayerView

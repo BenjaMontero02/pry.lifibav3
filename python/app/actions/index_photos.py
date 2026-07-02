@@ -7,6 +7,7 @@ import numpy as np
 
 from app.progress import write_progress_event
 from app.services.face_index_service import (
+    FACE_MODEL_NAME,
     create_empty_index,
     get_face_analyzer,
     is_id_mapped_index,
@@ -31,8 +32,10 @@ INDEX_DET_SIZE = (1024, 1024)
 
 # Quality gate for indexing: tiny or low-confidence detections (background
 # crowd) produce noisy embeddings that cause false positives in search.
-MIN_FACE_SIZE_PX = 40
-MIN_FACE_DET_SCORE = 0.55
+# Tuned for phone-quality event photos where the main subject's face can be
+# ~30-45px and in profile (profiles score lower on detection confidence).
+MIN_FACE_SIZE_PX = 28
+MIN_FACE_DET_SCORE = 0.50
 
 
 def _passes_quality_filter(face):
@@ -306,6 +309,15 @@ def index_photos(data, request_id):
     if rebuild_reason is None and vectors and not _vectors_have_stable_ids(vectors):
         rebuild_reason = "legacy_vectors_format"
 
+    # Embeddings from different models are not comparable: an index built with
+    # another model (or a legacy manifest without the key) must be rebuilt.
+    if (
+        rebuild_reason is None
+        and photos_state
+        and manifest.get("embedding_model") != FACE_MODEL_NAME
+    ):
+        rebuild_reason = "embedding_model_changed"
+
     if rebuild_reason is not None:
         index = create_empty_index()
         vectors = []
@@ -323,6 +335,10 @@ def index_photos(data, request_id):
 
     if manifest.get("next_face_id") != next_face_id:
         manifest["next_face_id"] = next_face_id
+        dirty_manifest = True
+
+    if manifest.get("embedding_model") != FACE_MODEL_NAME:
+        manifest["embedding_model"] = FACE_MODEL_NAME
         dirty_manifest = True
 
     # Incremental removal: drop stale vectors (removed or modified photos) from
@@ -377,6 +393,7 @@ def index_photos(data, request_id):
     faces_indexed_from_new_or_modified_photos = 0
     faces_reindexed_from_unchanged_photos = 0
     photos_without_faces = 0
+    photos_with_only_filtered_faces = 0
     faces_filtered_by_quality = 0
     unreadable_photos = 0
     failed_photos = 0
@@ -503,12 +520,19 @@ def index_photos(data, request_id):
 
             faces_detected = len(valid_embeddings)
             if faces_detected == 0:
-                photos_without_faces += 1
+                # Distinguish "nothing detected" from "detections discarded by
+                # the quality gate" so the operator can tune the filter.
+                if faces:
+                    no_face_status = "faces_filtered"
+                    photos_with_only_filtered_faces += 1
+                else:
+                    no_face_status = "no_faces"
+                    photos_without_faces += 1
                 photos_state[photo_path] = {
                     "mtime_ns": signature["mtime_ns"],
                     "size": signature["size"],
                     "faces_detected": 0,
-                    "status": "no_faces",
+                    "status": no_face_status,
                     "indexed_at": int(time.time()),
                 }
                 dirty_manifest = True
@@ -517,7 +541,7 @@ def index_photos(data, request_id):
                     processed_photos,
                     total_photos,
                     photo_path,
-                    "no_faces",
+                    no_face_status,
                     0,
                     change_type,
                 )
@@ -639,6 +663,8 @@ def index_photos(data, request_id):
             "photosWithoutFaces": photos_without_faces,
             "runPhotosWithoutFaces": photos_without_faces,
             "facesFilteredByQuality": faces_filtered_by_quality,
+            "photosWithOnlyFilteredFaces": photos_with_only_filtered_faces,
+            "currentFacesFilteredPhotos": current_status_counts.get("faces_filtered", 0),
             "currentPhotosWithoutFaces": current_photos_without_faces,
             "totalPhotosWithoutFaces": current_photos_without_faces,
             "unreadablePhotos": unreadable_photos,

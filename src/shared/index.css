@@ -601,6 +601,46 @@ body {
   object-fit: cover;
 }
 
+.photo-open-btn {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.photo-open-btn:hover .photo-thumb,
+.photo-open-btn:focus-visible .photo-thumb {
+  border-color: rgba(28, 34, 49, 0.45);
+}
+
+.photo-open-link {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.photo-open-link:hover,
+.photo-open-link:focus-visible {
+  text-decoration: underline;
+}
+
+.photo-open-btn:disabled,
+.photo-open-link:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
 .image-placeholder {
   display: grid;
   place-items: center;

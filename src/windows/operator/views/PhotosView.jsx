@@ -7,6 +7,7 @@ const PHOTO_STATUS_FILTERS = [
   { id: "pending", label: "Pendientes" },
   { id: "indexed", label: "Indexadas" },
   { id: "no_faces", label: "Sin cara" },
+  { id: "faces_filtered", label: "Cara descartada" },
   { id: "error", label: "Con error" }
 ];
 
@@ -15,6 +16,7 @@ const EMPTY_STATUS_COUNTS = {
   pending: 0,
   indexed: 0,
   no_faces: 0,
+  faces_filtered: 0,
   error: 0
 };
 
@@ -176,7 +178,8 @@ export default function PhotosView({
   onPhotosSearchDraftChange,
   onClearPhotosSearch,
   onPhotosScroll,
-  onShowMorePhotos
+  onShowMorePhotos,
+  onOpenPhoto
 }) {
   const [photoStatusFilter, setPhotoStatusFilter] = useState("all");
 
@@ -341,7 +344,7 @@ export default function PhotosView({
       <div className="photos-scroll" ref={photosScrollRef} onScroll={onPhotosScroll}>
         <div className="photos-list" role="list" aria-label="Listado de fotos">
           {photos.map((photo, index) => (
-            <PhotoRow key={photo.path} photo={photo} displayIndex={index + 1} />
+            <PhotoRow key={photo.path} photo={photo} displayIndex={index + 1} onOpen={onOpenPhoto} />
           ))}
         </div>
         {hasMorePhotos ? (
