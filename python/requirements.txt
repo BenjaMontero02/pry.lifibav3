@@ -1,0 +1,5 @@
+insightface
+onnxruntime
+faiss-cpu
+Pillow
+opencv-python

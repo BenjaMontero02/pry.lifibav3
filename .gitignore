@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+.playwright-mcp/
+dist/
+release/
+build/
+__pycache__/
+*.pyc
+python/dist/
+python/build/
+dist/

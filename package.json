@@ -1,0 +1,39 @@
+{
+  "name": "lifibav3-desktop-scaffold",
+  "version": "0.1.0",
+  "description": "Windows desktop scaffold with Electron, React, Tailwind v4, SQLite and Python child process bridge",
+  "main": "electron/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm:dev:vite\" \"pnpm:dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "node scripts/dev-electron.cjs",
+    "smoke:dev": "node scripts/smoke-dev.cjs",
+    "smoke:ipc": "node scripts/smoke-ipc.cjs",
+    "postinstall": "electron-builder install-app-deps",
+    "build:python": "scripts\\build-python.bat",
+    "build:renderer": "vite build",
+    "build": "pnpm run build:python && pnpm run build:renderer && electron-builder --config electron-builder.yml",
+    "check:electron": "node --check electron/main.js && node --check electron/preload.js && node --check electron/python-bridge.js && node --check scripts/dev-electron.cjs && node --check scripts/smoke-dev.cjs && node --check scripts/smoke-ipc.cjs",
+    "check:python": "python -m compileall -q python",
+    "check": "pnpm run check:electron && pnpm run check:python && pnpm run build:renderer",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.9.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.7",
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "prebuild-install": "^7.1.3",
+    "tailwindcss": "^4.1.7",
+    "vite": "^5.4.19",
+    "wait-on": "^8.0.2"
+  }
+}

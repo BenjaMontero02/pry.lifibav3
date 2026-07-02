@@ -1,0 +1,51 @@
+appId: com.lifibav3.desktop
+productName: LifibaV3
+copyright: Copyright (c) 2026 Lifiba
+directories:
+  output: release
+  buildResources: resources/build
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
+asar: true
+asarUnpack:
+  - "node_modules/better-sqlite3/**/*"
+  - "node_modules/bindings/**/*"
+  - "node_modules/file-uri-to-path/**/*"
+files:
+  - "dist/**/*"
+  - "electron/**/*"
+  - "package.json"
+extraMetadata:
+  author: Lifiba
+  description: LifibaV3 Windows desktop scanner and player
+  main: electron/main.js
+extraResources:
+  - from: "resources/python"
+    to: "python"
+    filter:
+      - "**/*"
+      - "!**/.gitkeep"
+win:
+  icon: icon.ico
+  executableName: LifibaV3
+  legalTrademarks: LifibaV3
+  requestedExecutionLevel: asInvoker
+  signAndEditExecutable: true
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  selectPerMachineByDefault: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: LifibaV3
+  uninstallDisplayName: LifibaV3
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
