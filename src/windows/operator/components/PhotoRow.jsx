@@ -27,17 +27,14 @@ export default function PhotoRow({ photo, displayIndex, onOpen }) {
           className="photo-thumb"
           fallbackLabel="Foto"
           loading="lazy"
-          width="56"
-          height="56"
+          width="52"
+          height="52"
         />
       </button>
       <p className="photo-name" title={photo.name}>
         <button type="button" className="photo-open-link" onClick={handleOpen} disabled={!canOpen}>
           {photo.name}
         </button>
-      </p>
-      <p className="photo-path" title={photo.path}>
-        {photo.path}
       </p>
       <PhotoStatusBadge status={photo.indexedStatus} lastError={photo.lastError || ""} />
     </article>

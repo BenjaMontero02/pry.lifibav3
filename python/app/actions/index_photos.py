@@ -7,12 +7,12 @@ import numpy as np
 
 from app.progress import write_progress_event
 from app.services.face_index_service import (
-    FACE_MODEL_NAME,
     create_empty_index,
+    extract_face_embedding,
     get_face_analyzer,
+    get_face_model_name,
     is_id_mapped_index,
     load_index,
-    normalize_embedding,
 )
 from app.services.file_service import (
     file_signature,
@@ -34,21 +34,26 @@ INDEX_DET_SIZE = (1024, 1024)
 # crowd) produce noisy embeddings that cause false positives in search.
 # Tuned for phone-quality event photos where the main subject's face can be
 # ~30-45px and in profile (profiles score lower on detection confidence).
-MIN_FACE_SIZE_PX = 28
-MIN_FACE_DET_SCORE = 0.50
+DEFAULT_MIN_FACE_SIZE_PX = 28
+DEFAULT_MIN_FACE_DET_SCORE = 0.50
 
 
-def _passes_quality_filter(face):
+def _passes_quality_filter(face, min_face_size=None, min_det_score=None):
+    if min_face_size is None:
+        min_face_size = DEFAULT_MIN_FACE_SIZE_PX
+    if min_det_score is None:
+        min_det_score = DEFAULT_MIN_FACE_DET_SCORE
+
     bbox = getattr(face, "bbox", None)
     if bbox is None or len(bbox) < 4:
         return False
     width = float(bbox[2]) - float(bbox[0])
     height = float(bbox[3]) - float(bbox[1])
-    if min(width, height) < MIN_FACE_SIZE_PX:
+    if min(width, height) < min_face_size:
         return False
 
     det_score = getattr(face, "det_score", None)
-    if det_score is None or float(det_score) < MIN_FACE_DET_SCORE:
+    if det_score is None or float(det_score) < min_det_score:
         return False
     return True
 
@@ -264,6 +269,15 @@ def index_photos(data, request_id):
     manifest_path = os.path.join(index_dir, "photos_manifest.json")
 
     force_reindex = bool(data.get("forceReindex", False))
+
+    min_face_size = int(data.get("minFaceSizePx", DEFAULT_MIN_FACE_SIZE_PX))
+    if min_face_size < 1:
+        min_face_size = DEFAULT_MIN_FACE_SIZE_PX
+
+    min_det_score = float(data.get("minFaceDetScore", DEFAULT_MIN_FACE_DET_SCORE))
+    if not (0.0 < min_det_score <= 1.0):
+        min_det_score = DEFAULT_MIN_FACE_DET_SCORE
+
     file_signatures = {}
     for photo_path in photo_paths:
         try:
@@ -314,7 +328,7 @@ def index_photos(data, request_id):
     if (
         rebuild_reason is None
         and photos_state
-        and manifest.get("embedding_model") != FACE_MODEL_NAME
+        and manifest.get("embedding_model") != get_face_model_name()
     ):
         rebuild_reason = "embedding_model_changed"
 
@@ -337,8 +351,8 @@ def index_photos(data, request_id):
         manifest["next_face_id"] = next_face_id
         dirty_manifest = True
 
-    if manifest.get("embedding_model") != FACE_MODEL_NAME:
-        manifest["embedding_model"] = FACE_MODEL_NAME
+    if manifest.get("embedding_model") != get_face_model_name():
+        manifest["embedding_model"] = get_face_model_name()
         dirty_manifest = True
 
     # Incremental removal: drop stale vectors (removed or modified photos) from
@@ -511,10 +525,10 @@ def index_photos(data, request_id):
             faces = analyzer.get(image)
             valid_embeddings = []
             for face in faces:
-                if not _passes_quality_filter(face):
+                if not _passes_quality_filter(face, min_face_size, min_det_score):
                     faces_filtered_by_quality += 1
                     continue
-                embedding = normalize_embedding(getattr(face, "embedding", None))
+                embedding = extract_face_embedding(image, face)
                 if embedding is not None:
                     valid_embeddings.append(embedding)
 

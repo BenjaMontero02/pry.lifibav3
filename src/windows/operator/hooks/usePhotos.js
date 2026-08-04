@@ -363,7 +363,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
 
   const indexingProgressLabel = useMemo(() => {
     if (!indexingProgress) {
-      return "Preparando indexacion...";
+      return "Preparando analisis...";
     }
 
     const processed = Number(indexingProgress.processed || 0);
@@ -371,7 +371,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     const statusText = String(indexingProgress.status || "procesando");
     const facesDetected = Number(indexingProgress.facesDetected || 0);
     const faceText = facesDetected > 0 ? ` - ${facesDetected} caras` : "";
-    return `${processed}/${total} fotos - ${statusText}${faceText}`;
+    return `Analizando ${processed} de ${total} fotos.${faceText}`;
   }, [indexingProgress]);
 
   const handlePhotosSearchSubmit = useCallback((eventOrOptions, maybeOptions) => {
@@ -403,7 +403,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
 
   const handleClearIndex = useCallback(async () => {
     const confirmed = window.confirm(
-      "Esto borra el indice facial local y limpia la previsualizacion del reproductor. Las fotos originales no se eliminan. Continuar?"
+      "Esto borra los datos de reconocimiento facial y limpia la pantalla del jugador. Las fotos originales no se eliminan. Continuar?"
     );
     if (!confirmed) {
       return;
@@ -417,10 +417,10 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       await desktopApi.invoke("index:clear");
       onIndexCleared?.();
       setIndexingProgress(null);
-      setIndexingMessage("Indice facial limpiado. Ejecuta Actualizar fotos para volver a indexar.");
+      setIndexingMessage("Catalogo limpiado. Presiona 'Actualizar fotos' para volver a analizar.");
       await loadPhotos({ offset: 0, statusFilter: photosStatusFilter });
     } catch (error) {
-      setPhotosError(`No se pudo limpiar el indice: ${String(error.message || error)}`);
+      setPhotosError(`No se pudo limpiar el catalogo: ${String(error.message || error)}`);
     } finally {
       setClearingIndex(false);
     }
@@ -469,16 +469,16 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       const stats = response?.result?.stats || null;
       if (stats) {
         setIndexingMessage(
-          `Indexacion completa: ${stats.processedPhotos}/${stats.totalPhotos} fotos, ${stats.newFacesIndexed} caras nuevas.`
+          `Analisis completo: ${stats.processedPhotos} fotos revisadas, ${stats.newFacesIndexed} rostros encontrados.`
         );
       } else {
-        setIndexingMessage("Indexacion completa.");
+        setIndexingMessage("Analisis completo.");
       }
       await loadPhotos({ refresh: true, statusFilter: photosStatusFilter });
     } catch (error) {
       setIndexingMessage("");
       setIndexingProgress(null);
-      setPhotosError(`No se pudieron indexar las fotos: ${String(error.message || error)}`);
+      setPhotosError(`No se pudo completar el analisis: ${String(error.message || error)}`);
     } finally {
       setIndexingPhotos(false);
     }
@@ -561,7 +561,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       }
 
       if (event?.reason !== "thumbnail-prewarm") {
-        setPhotosError(`No se pudo monitorear el sourcepad: ${message}`);
+        setPhotosError(`No se pudo monitorear la carpeta: ${message}`);
       }
     });
     const unsubscribeThumbnailProgress = desktopApi.on("sourcepad:thumbnail-progress", (event) => {

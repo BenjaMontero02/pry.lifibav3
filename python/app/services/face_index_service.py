@@ -7,11 +7,45 @@ import numpy as np
 from insightface.app import FaceAnalysis
 
 EMBEDDING_DIMENSION = 512
-# antelopev2 (ResNet100 @ Glint360K) reconoce mejor que buffalo_l
-# (ResNet50 @ WebFace600K); mismo embedding de 512 dims. Cambiar el modelo
-# invalida los indices existentes: index_photos fuerza rebuild si el
-# manifest registra otro modelo.
-FACE_MODEL_NAME = "antelopev2"
+# Pack de InsightFace usado SIEMPRE para deteccion (SCRFD + landmarks).
+DETECTION_MODEL_NAME = "antelopev2"
+
+# Backend de embeddings:
+#  - "adaface": AdaFace IR-101 WebFace12M via ONNX (mejor con caras chicas,
+#    borrosas y de perfil). Requiere python/models/adaface_ir101_webface12m.onnx.
+#  - "insightface": embedding ArcFace del propio pack antelopev2.
+# Se puede forzar con la variable de entorno LIFIBA_EMBEDDING_BACKEND.
+# ``get_face_model_name()`` viaja al manifest del indice: cambiar de backend dispara
+# el rebuild automatico (embedding_model_changed) en index_photos.
+def _resolve_embedding_backend():
+    from app.services import adaface_service
+
+    requested = os.environ.get("LIFIBA_EMBEDDING_BACKEND", "adaface").strip().lower()
+    if requested == "adaface":
+        if adaface_service.is_available():
+            return "adaface"
+        sys.stderr.write(
+            "AdaFace backend requested but model file is missing; "
+            "falling back to insightface embeddings.\n"
+        )
+    return "insightface"
+
+
+EMBEDDING_BACKEND = None
+
+
+def get_embedding_backend():
+    global EMBEDDING_BACKEND
+    if EMBEDDING_BACKEND is None:
+        EMBEDDING_BACKEND = _resolve_embedding_backend()
+    return EMBEDDING_BACKEND
+
+
+def get_face_model_name():
+    if get_embedding_backend() == "adaface":
+        return "adaface_ir101_webface12m"
+    return DETECTION_MODEL_NAME
+
 DEFAULT_DET_SIZE = (640, 640)
 _face_analyzer = None
 _face_analyzer_det_size = None
@@ -106,8 +140,8 @@ def load_index(index_path):
 def _resolve_insightface_root():
     """Return the bundled InsightFace root when running frozen, else None.
 
-    build.spec packages ``~/.insightface/models/<FACE_MODEL_NAME>`` under
-    ``insightface_models/models/<FACE_MODEL_NAME>`` inside the PyInstaller
+    build.spec packages ``~/.insightface/models/<DETECTION_MODEL_NAME>`` under
+    ``insightface_models/models/<DETECTION_MODEL_NAME>`` inside the PyInstaller
     bundle. FaceAnalysis(root=...) expects the models under
     ``<root>/models/<name>``.
     """
@@ -119,7 +153,7 @@ def _resolve_insightface_root():
         return None
 
     bundled_root = os.path.join(bundle_dir, "insightface_models")
-    if os.path.isdir(os.path.join(bundled_root, "models", FACE_MODEL_NAME)):
+    if os.path.isdir(os.path.join(bundled_root, "models", DETECTION_MODEL_NAME)):
         return bundled_root
     return None
 
@@ -143,7 +177,7 @@ def get_face_analyzer(det_size=DEFAULT_DET_SIZE):
             _face_analyzer_det_size = det_size
         return _face_analyzer
 
-    analyzer_kwargs = {"name": FACE_MODEL_NAME, "providers": ["CPUExecutionProvider"]}
+    analyzer_kwargs = {"name": DETECTION_MODEL_NAME, "providers": ["CPUExecutionProvider"]}
     insightface_root = _resolve_insightface_root()
     if insightface_root:
         analyzer_kwargs["root"] = insightface_root
@@ -165,3 +199,16 @@ def normalize_embedding(raw_embedding):
     if norm <= 0:
         return None
     return embedding / norm
+
+
+def extract_face_embedding(image_bgr, face):
+    """Embedding L2-normalizado de una cara detectada, segun el backend activo.
+
+    Unica puerta de entrada para indexado y busqueda: garantiza que ambos
+    usan el mismo modelo (embeddings de modelos distintos no son comparables).
+    """
+    if get_embedding_backend() == "adaface":
+        from app.services import adaface_service
+
+        return adaface_service.compute_embedding(image_bgr, face)
+    return normalize_embedding(getattr(face, "embedding", None))

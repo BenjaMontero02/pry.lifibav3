@@ -48,6 +48,8 @@ let thumbnailPrewarmStats = {
 const isDev = !app.isPackaged;
 const SOURCE_PATH_CONFIG_KEY = "add source";
 const PLAYER_PREVIEW_CONFIG_KEY = "player preview photos";
+const INDEX_FACE_SIZE_CONFIG_KEY = "index.faceSizePx";
+const INDEX_FACE_DET_SCORE_CONFIG_KEY = "index.faceDetScore";
 const SOURCE_PHOTO_SCHEME = "sourcephoto";
 const SOURCE_THUMB_SCHEME = "sourcethumb";
 const PHOTO_INDEX_STATUS_TABLE = "photo_index_status";
@@ -1362,6 +1364,29 @@ function registerIpc() {
     };
   });
 
+  ipcMain.handle("config:get-index-settings", async () => {
+    const faceSizePx = getConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY);
+    const faceDetScore = getConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY);
+    return {
+      faceSizePx: faceSizePx !== null ? Number(faceSizePx) : 28,
+      faceDetScore: faceDetScore !== null ? Number(faceDetScore) : 0.50
+    };
+  });
+
+  ipcMain.handle("config:set-index-settings", async (_event, payload) => {
+    const faceSizePx = payload?.faceSizePx != null
+      ? Math.max(10, Math.min(200, Math.round(Number(payload.faceSizePx))))
+      : 28;
+    const faceDetScore = payload?.faceDetScore != null
+      ? Math.max(0.05, Math.min(0.99, Number(Number(payload.faceDetScore).toFixed(2))))
+      : 0.50;
+
+    setConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY, String(faceSizePx));
+    setConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY, String(faceDetScore));
+
+    return { faceSizePx, faceDetScore };
+  });
+
   ipcMain.handle("config:pick-source-path", async () => {
     const focusedWindow = BrowserWindow.getFocusedWindow() || null;
     const result = await dialog.showOpenDialog(focusedWindow, {
@@ -1499,8 +1524,21 @@ function registerIpc() {
       indexDir: getFaceIndexDir()
     };
 
+    const extra = {};
+    if (action === "index_photos") {
+      const faceSizePx = getConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY);
+      const faceDetScore = getConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY);
+      if (faceSizePx !== null) {
+        extra.minFaceSizePx = Number(faceSizePx);
+      }
+      if (faceDetScore !== null) {
+        extra.minFaceDetScore = Number(faceDetScore);
+      }
+    }
+
     const mergedData = {
       ...(data || {}),
+      ...extra,
       ...(sourcePath ? { sourcePath } : {}),
       __runtime: {
         ...((data && data.__runtime) || {}),

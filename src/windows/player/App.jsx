@@ -18,11 +18,9 @@ function normalizePhotoIndex(index, photosLength) {
   if (photosLength <= 0) {
     return 0;
   }
-
   if (!Number.isFinite(index)) {
     return 0;
   }
-
   return Math.min(Math.max(index, 0), photosLength - 1);
 }
 
@@ -30,7 +28,6 @@ function getAdjacentPhotoIndex(currentIndex, photosLength, direction) {
   if (photosLength <= 1) {
     return normalizePhotoIndex(currentIndex, photosLength);
   }
-
   const normalizedIndex = normalizePhotoIndex(currentIndex, photosLength);
   return (normalizedIndex + direction + photosLength) % photosLength;
 }
@@ -39,7 +36,6 @@ function preloadPhotoUrl(url) {
   if (!url || preloadedImageUrls.has(url) || typeof window === "undefined") {
     return;
   }
-
   preloadedImageUrls.add(url);
   const image = new window.Image();
   image.decoding = "async";
@@ -50,7 +46,6 @@ function isEditableTarget(target) {
   if (!target || typeof target !== "object") {
     return false;
   }
-
   const tagName = target.tagName;
   return (
     target.isContentEditable ||
@@ -64,7 +59,6 @@ function exitDocumentFullscreen() {
   if (!document.fullscreenElement || !document.exitFullscreen) {
     return;
   }
-
   document.exitFullscreen().catch(() => undefined);
 }
 
@@ -73,7 +67,6 @@ function toggleDocumentFullscreen() {
     exitDocumentFullscreen();
     return;
   }
-
   document.documentElement.requestFullscreen?.().catch(() => undefined);
 }
 
@@ -81,14 +74,13 @@ const HeroPhoto = memo(function HeroPhoto({ photo }) {
   if (!photo) {
     return null;
   }
-
   return (
     <article className="player-hero-card" aria-label="Foto destacada">
       <FallbackImage
         key={photo.url}
         className="player-hero-media"
         src={photo.url}
-        alt={`Foto referencia ${photo.displayNumber}`}
+        alt={`Foto ${photo.displayNumber}`}
         fallbackLabel="Sin imagen"
         loading="eager"
         fetchPriority="high"
@@ -122,7 +114,7 @@ const GalleryPhoto = memo(function GalleryPhoto({ photo, originalIndex, onSelect
       <FallbackImage
         className="player-photo-image"
         src={photo.url}
-        alt={`Foto referencia ${photo.displayNumber}`}
+        alt={`Foto ${photo.displayNumber}`}
         fallbackLabel="Sin imagen"
         loading="lazy"
         decoding="async"
@@ -194,7 +186,6 @@ export default function App() {
     if (!Array.isArray(previewPayload?.photos)) {
       return [];
     }
-
     return previewPayload.photos
       .filter((photo) => photo && photo.url)
       .map((photo, index) => ({
@@ -228,7 +219,6 @@ export default function App() {
     if (photos.length <= 1) {
       return;
     }
-
     preloadPhotoUrl(photos[getAdjacentPhotoIndex(normalizedActivePhotoIndex, photos.length, -1)]?.url);
     preloadPhotoUrl(photos[getAdjacentPhotoIndex(normalizedActivePhotoIndex, photos.length, 1)]?.url);
   }, [normalizedActivePhotoIndex, photos]);
@@ -311,10 +301,10 @@ export default function App() {
       <section className="player-stage">
         {photos.length === 0 ? (
           <section className="player-empty">
-            <p>Esperando seleccion de fotos.</p>
+            <p>Tus fotos van a aparecer aca.</p>
           </section>
         ) : (
-          <section className="player-gallery" aria-label="Fotos seleccionadas para cliente">
+          <section className="player-gallery" aria-label="Tus fotos del evento">
             <HeroPhoto photo={heroPhoto} />
 
             {galleryPhotos.length > 0 ? (

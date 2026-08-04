@@ -5,9 +5,9 @@ import PhotoRow from "../components/PhotoRow";
 const PHOTO_STATUS_FILTERS = [
   { id: "all", label: "Todas" },
   { id: "pending", label: "Pendientes" },
-  { id: "indexed", label: "Indexadas" },
-  { id: "no_faces", label: "Sin cara" },
-  { id: "faces_filtered", label: "Cara descartada" },
+  { id: "indexed", label: "Listas" },
+  { id: "no_faces", label: "Sin rostro" },
+  { id: "faces_filtered", label: "Rostro no valido" },
   { id: "error", label: "Con error" }
 ];
 
@@ -43,45 +43,41 @@ function formatDateTime(value) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
     return "Sin datos";
   }
-
   return DATE_TIME_FORMATTER.format(new Date(timestamp));
 }
 
 function getWatcherStatusMeta(watchStatus) {
   if (!watchStatus?.sourcePath) {
-    return { label: "Sin sourcepad", tone: "muted" };
+    return { label: "Sin carpeta", tone: "muted" };
   }
   if (watchStatus.lastError) {
     return { label: "Error", tone: "error" };
   }
   if (watchStatus.pendingRescan) {
-    return { label: "Reescaneando", tone: "busy" };
+    return { label: "Revisando", tone: "busy" };
   }
   if (watchStatus.dirty) {
     return { label: "Cambios pendientes", tone: "busy" };
   }
   if (watchStatus.watching) {
-    return { label: "Monitoreando", tone: "ok" };
+    return { label: "Activo", tone: "ok" };
   }
-
-  return { label: "Watcher inactivo", tone: "muted" };
+  return { label: "Inactivo", tone: "muted" };
 }
 
 function getPrewarmStatusMeta(prewarm) {
   const pending = Number(prewarm?.pending || 0);
   const failed = Number(prewarm?.failed || 0);
   const total = Number(prewarm?.total || 0);
-
   if (failed > 0) {
     return { label: "Con fallas", tone: "error" };
   }
   if (pending > 0) {
-    return { label: "Prewarm activo", tone: "busy" };
+    return { label: "Procesando", tone: "busy" };
   }
   if (total > 0) {
-    return { label: "Prewarm listo", tone: "ok" };
+    return { label: "Listo", tone: "ok" };
   }
-
   return { label: "Sin actividad", tone: "muted" };
 }
 
@@ -90,12 +86,10 @@ function getChangeText(watchStatus) {
   const eventType = lastEvent.eventType || "cambio";
   const filename = lastEvent.filename ? ` - ${lastEvent.filename}` : "";
   const timestamp = watchStatus?.lastChangedAt || lastEvent.noticedAt;
-
   if (!timestamp && !lastEvent.filename) {
-    return "Cambios: sin cambios detectados";
+    return "Sin cambios detectados";
   }
-
-  return `Cambios: ${eventType}${filename} - ${formatDateTime(timestamp)}`;
+  return `Ultimo cambio: ${eventType}${filename} (${formatDateTime(timestamp)})`;
 }
 
 function SourcepadRuntimePanel({ watchStatus, thumbnailPrewarm }) {
@@ -104,17 +98,17 @@ function SourcepadRuntimePanel({ watchStatus, thumbnailPrewarm }) {
   const watcherStatus = getWatcherStatusMeta(currentWatchStatus);
   const prewarmStatus = getPrewarmStatusMeta(prewarm);
   const lastError = currentWatchStatus.lastError ||
-    (Number(prewarm.failed || 0) > 0 ? "Hay thumbnails fallidos en el ultimo prewarm." : "");
+    (Number(prewarm.failed || 0) > 0 ? "Algunas miniaturas no se pudieron generar." : "");
   const completed = Number(prewarm.completed || 0);
   const failed = Number(prewarm.failed || 0);
   const pending = Number(prewarm.pending || 0);
 
   return (
-    <section className="sourcepad-runtime" aria-label="Estado del watcher sourcepad y thumbnails">
+    <section className="sourcepad-runtime" aria-label="Estado de la carpeta y miniaturas">
       <div className="sourcepad-runtime-grid">
         <div className="sourcepad-runtime-panel">
           <div className="sourcepad-runtime-head">
-            <span className="sourcepad-runtime-title">Watcher sourcepad</span>
+            <span className="sourcepad-runtime-title">Carpeta</span>
             <span className={`sourcepad-chip sourcepad-chip-${watcherStatus.tone}`}>
               {watcherStatus.label}
             </span>
@@ -122,35 +116,35 @@ function SourcepadRuntimePanel({ watchStatus, thumbnailPrewarm }) {
           <p className="sourcepad-runtime-line" title={getChangeText(currentWatchStatus)}>
             {getChangeText(currentWatchStatus)}
           </p>
-          <p className="meta">Ultimo escaneo: {formatDateTime(currentWatchStatus.lastScannedAt)}</p>
+          <p className="meta">Ultima revision: {formatDateTime(currentWatchStatus.lastScannedAt)}</p>
         </div>
 
         <div className="sourcepad-runtime-panel">
           <div className="sourcepad-runtime-head">
-            <span className="sourcepad-runtime-title">Thumbnails</span>
+            <span className="sourcepad-runtime-title">Miniaturas</span>
             <span className={`sourcepad-chip sourcepad-chip-${prewarmStatus.tone}`}>
               {prewarmStatus.label}
             </span>
           </div>
-          <div className="sourcepad-thumbnail-stats" aria-label="Progreso de prewarm de thumbnails">
+          <div className="sourcepad-thumbnail-stats" aria-label="Progreso de miniaturas">
             <span>
               <strong>{formatCount(pending)}</strong>
               <small>Pendientes</small>
             </span>
             <span>
               <strong>{formatCount(completed)}</strong>
-              <small>Completados</small>
+              <small>Listas</small>
             </span>
             <span>
               <strong>{formatCount(failed)}</strong>
-              <small>Fallidos</small>
+              <small>Fallidas</small>
             </span>
           </div>
         </div>
       </div>
 
       <p className={`sourcepad-runtime-error${lastError ? " sourcepad-runtime-error-active" : ""}`}>
-        Ultimo error: <span>{lastError || "sin errores recientes"}</span>
+        Ultimo error: <span>{lastError || "sin errores"}</span>
       </p>
     </section>
   );
@@ -196,14 +190,14 @@ export default function PhotosView({
   const loadedCount = photos.length;
   const remainingCount = Math.max(0, currentTotal - loadedCount);
   const toolbarCountText = isFilteringByStatus || hasActiveSearch
-    ? `${currentTotal} fotos en la vista actual - ${loadedCount} cargadas`
+    ? `${currentTotal} fotos en la vista - ${loadedCount} cargadas`
     : `${currentTotal} fotos encontradas - ${loadedCount} cargadas`;
   const filterScopeText = hasActiveSearch
     ? "en la busqueda actual"
-    : "en toda la carpeta";
+    : "en la carpeta";
   const emptyPhotosMessage = isFilteringByStatus || hasActiveSearch
-    ? `No hay fotos para ${activeFilterLabel.toLowerCase()} ${filterScopeText}.`
-    : "No se encontraron fotos en la carpeta origen.";
+    ? `No hay fotos para "${activeFilterLabel.toLowerCase()}" ${filterScopeText}.`
+    : "No se encontraron fotos en la carpeta.";
   const sourcepadWatchStatus = photosMeta.sourcepadWatchStatus || {};
   const thumbnailPrewarm = photosMeta.thumbnailPrewarm || sourcepadWatchStatus.thumbnailPrewarm || {};
 
@@ -220,9 +214,11 @@ export default function PhotosView({
 
   return (
     <article className="operator-card operator-card-photos">
-      <p className="eyebrow">Operador Lifibav3</p>
-      <h1>Fotos</h1>
-      <p className="intro">Listado de fotos detectadas en la carpeta de origen configurada como sourcepad.</p>
+      <p className="eyebrow">Catalogo de fotos</p>
+      <h1>Fotos del evento</h1>
+      <p className="intro">
+        Todas las fotos encontradas en la carpeta del evento. Podes buscar por nombre y filtrar por estado.
+      </p>
 
       <div className="photos-toolbar">
         <button
@@ -231,7 +227,7 @@ export default function PhotosView({
           onClick={onUpdatePhotos}
           disabled={photosLoading || indexingPhotos || clearingIndex}
         >
-          {indexingPhotos ? "Indexando fotos..." : "Actualizar fotos"}
+          {indexingPhotos ? "Analizando fotos..." : "Actualizar fotos"}
         </button>
         <button
           type="button"
@@ -239,12 +235,12 @@ export default function PhotosView({
           onClick={onClearIndex}
           disabled={photosLoading || indexingPhotos || clearingIndex}
         >
-          {clearingIndex ? "Limpiando..." : "Limpiar indice"}
+          {clearingIndex ? "Limpiando..." : "Limpiar catalogo"}
         </button>
         <span className="meta">
           {photosPath
             ? toolbarCountText
-            : "No hay carpeta sourcepad configurada"}
+            : "No hay carpeta configurada"}
         </span>
       </div>
 
@@ -260,7 +256,7 @@ export default function PhotosView({
           className="path-input"
           value={photosSearchDraft}
           onChange={(event) => onPhotosSearchDraftChange(event.target.value)}
-          placeholder="Nombre o ruta de foto"
+          placeholder="Nombre de la foto"
           autoComplete="off"
           spellCheck={false}
           name="photosSearch"
@@ -300,7 +296,7 @@ export default function PhotosView({
         </div>
         <p className="photos-filter-note">
           {activeFilterLabel}: {currentTotal} fotos {filterScopeText}. {loadedCount} cargadas
-          {hasMorePhotos ? `; quedan ${remainingCount}.` : "."}
+          {hasMorePhotos ? ` (${remainingCount} restantes)` : "."}
         </p>
       </div>
 
@@ -309,13 +305,6 @@ export default function PhotosView({
         thumbnailPrewarm={thumbnailPrewarm}
       />
 
-      <IndexSummary summary={currentIndexSummary} />
-
-      {photosPath ? (
-        <p className="photos-source">
-          Carpeta origen: <span>{photosPath}</span>
-        </p>
-      ) : null}
 
       {indexingPhotos ? (
         <div className="index-progress" role="status" aria-live="polite">

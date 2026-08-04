@@ -38,6 +38,18 @@ else:
         "models, then rebuild.\n".format(model=FACE_MODEL_NAME, path=face_models_dir)
     )
 
+# AdaFace ONNX (backend de embeddings). Ruta frozen esperada por
+# app/services/adaface_service.py: <MEIPASS>/adaface_models/.
+adaface_model_path = os.path.join("python", "models", "adaface_ir101_webface12m.onnx")
+if os.path.isfile(adaface_model_path):
+    datas.append((adaface_model_path, "adaface_models"))
+else:
+    sys.stderr.write(
+        "WARNING: AdaFace ONNX not found at {path}. The packaged app will fall "
+        "back to insightface embeddings. Run scripts/convert_adaface_to_onnx.py "
+        "first if AdaFace is the intended backend.\n".format(path=adaface_model_path)
+    )
+
 a = Analysis(
     ["python/main.py"],
     pathex=[],
@@ -47,7 +59,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["torch", "torchvision"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

@@ -255,23 +255,23 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         return;
       }
       if (result.status === "no_matches_above_threshold") {
-        setScanStatus({
-          type: "error",
-          message: `No hubo matches por encima del umbral (${(result.threshold ?? safeThreshold).toFixed(2)}).`
-        });
+      setScanStatus({
+        type: "error",
+        message: "No se encontraron fotos con suficiente similitud. Proba ajustando la precision en Ajustes."
+      });
         return;
       }
       if (result.status === "empty_index") {
         setScanStatus({
           type: "error",
-          message: "El indice de rostros esta vacio. Primero ejecuta 'Actualizar fotos'."
+          message: "Todavia no se analizaron las fotos. Anda a Fotos y presiona 'Actualizar fotos'."
         });
         return;
       }
 
       setScanStatus({
         type: "success",
-        message: `Se encontraron ${matches.length} coincidencias ordenadas por similitud.`
+        message: `Se encontraron ${matches.length} fotos.`
       });
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -354,7 +354,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       });
       setScanStatus({
         type: "success",
-        message: `Previsualizacion enviada al reproductor (${result?.count || selectedMatches.length} fotos).`
+        message: `${result?.count || selectedMatches.length} fotos enviadas a la pantalla del jugador.`
       });
     } catch (error) {
       setScanStatus({

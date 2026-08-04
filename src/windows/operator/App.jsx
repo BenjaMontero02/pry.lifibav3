@@ -4,6 +4,7 @@ import useDiagnostics from "./hooks/useDiagnostics";
 import usePhotos from "./hooks/usePhotos";
 import useScanPlayer from "./hooks/useScanPlayer";
 import useSourcePathConfig from "./hooks/useSourcePathConfig";
+import useIndexSettings from "./hooks/useIndexSettings";
 import DiagnosticsView from "./views/DiagnosticsView";
 import OverviewView from "./views/OverviewView";
 import PhotosView from "./views/PhotosView";
@@ -14,9 +15,9 @@ import { getDesktopApi } from "../../shared/desktopApi";
 const NAV_ITEMS = [
   { id: "overview", label: "Resumen" },
   { id: "photos", label: "Fotos" },
-  { id: "scan-player", label: "Escanear jugador" },
+  { id: "scan-player", label: "Escanear" },
   { id: "diagnostics", label: "Diagnostico" },
-  { id: "settings", label: "Configuracion" }
+  { id: "settings", label: "Ajustes" }
 ];
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
   const [activeView, setActiveView] = useState("settings");
 
   const sourceConfig = useSourcePathConfig(desktopApi);
+  const indexSettings = useIndexSettings(desktopApi);
   const scan = useScanPlayer({ desktopApi, activeView });
   const diagnostics = useDiagnostics({ desktopApi, activeView });
   const photos = usePhotos({
@@ -37,7 +39,7 @@ export default function App() {
     <main className="operator-shell">
       <div className="operator-layout">
         <Sidebar
-          brand="Lifibav3"
+          brand="LifiBA"
           items={NAV_ITEMS}
           activeItemId={activeView}
           onSelectItem={setActiveView}
@@ -57,6 +59,14 @@ export default function App() {
               onSourcePathChange={sourceConfig.setSourcePath}
               onPickFolder={sourceConfig.handlePickFolder}
               onSave={sourceConfig.handleSave}
+              faceSizePx={indexSettings.faceSizePx}
+              faceDetScore={indexSettings.faceDetScore}
+              indexLoading={indexSettings.loading}
+              indexSaving={indexSettings.saving}
+              indexStatus={indexSettings.status}
+              onFaceSizePxChange={indexSettings.setFaceSizePx}
+              onFaceDetScoreChange={indexSettings.setFaceDetScore}
+              onIndexSettingsSave={indexSettings.handleSave}
             />
           ) : activeView === "photos" ? (
             <PhotosView

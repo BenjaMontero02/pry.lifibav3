@@ -28,13 +28,15 @@ export default function ScanPlayerView({
   onSendPreview,
   onToggleMatchSelection
 }) {
+  const hasMatches = scanMatches.length > 0;
+  const selectedCount = selectedMatches.length;
+
   return (
     <article className="operator-card operator-card-scan">
-      <p className="eyebrow">Operador Lifibav3</p>
+      <p className="eyebrow">Busqueda facial</p>
       <h1>Escanear jugador</h1>
       <p className="intro">
-        Captura un frame desde webcam (DroidCam/Camo), lo manda a InsightFace + FAISS y devuelve miniaturas ordenadas por
-        similitud coseno.
+        Captura el rostro del jugador con la camara y encontra todas sus fotos del evento.
       </p>
 
       <div className="scan-toolbar">
@@ -55,20 +57,6 @@ export default function ScanPlayerView({
             </option>
           ))}
         </select>
-        <label className="field-label" htmlFor="threshold-slider">
-          Umbral ({scanThreshold.toFixed(2)})
-        </label>
-        <input
-          id="threshold-slider"
-          className="scan-threshold"
-          type="range"
-          step="0.01"
-          min="0"
-          max="1"
-          value={scanThreshold}
-          onChange={(event) => onScanThresholdChange(Number(event.target.value))}
-          name="similarityThreshold"
-        />
         <button type="button" className="btn btn-secondary" onClick={onToggleCamera} disabled={scanCameraStarting}>
           {scanCameraStarting ? "Encendiendo..." : scanCameraActive ? "Apagar camara" : "Prender camara"}
         </button>
@@ -78,7 +66,7 @@ export default function ScanPlayerView({
           onClick={onCaptureAndSearch}
           disabled={!scanCameraActive || !scanVideoReady || scanInProgress}
         >
-          {scanInProgress ? "Escaneando..." : "Capturar y buscar"}
+          {scanInProgress ? "Buscando..." : "Capturar y buscar"}
         </button>
       </div>
 
@@ -94,14 +82,15 @@ export default function ScanPlayerView({
             onLoadedMetadata={onVideoLoadedMetadata}
           />
           {scanCameraStarting || (scanCameraActive && !scanVideoReady) ? (
-            <p className="meta">Inicializando stream de webcam...</p>
+            <p className="meta">Inicializando camara...</p>
           ) : null}
           <canvas id="scan-canvas" ref={scanCanvasRef} className="scan-canvas" aria-hidden="true" />
         </div>
 
-        <div className="scan-results">
-          <p className="field-label">Coincidencias</p>
-          {scanMatches.length > 0 ? (
+        <div className="scan-results" style={{ position: "relative" }}>
+          <p className="field-label">Resultados</p>
+
+          {hasMatches ? (
             <div className="scan-jump-row">
               <label className="field-label" htmlFor="jump-to-match-input">
                 Ir a foto #
@@ -129,6 +118,7 @@ export default function ScanPlayerView({
               </button>
             </div>
           ) : null}
+
           {jumpToMatchFeedback.message ? (
             <p
               className={jumpToMatchFeedback.type === "error" ? "status status-error" : "status status-success"}
@@ -137,22 +127,26 @@ export default function ScanPlayerView({
               {jumpToMatchFeedback.message}
             </p>
           ) : null}
-          {selectedMatches.length > 0 ? (
+
+          {selectedCount > 0 ? (
             <div className="scan-preview-cta">
-              <p className="meta">{selectedMatches.length} fotos seleccionadas</p>
+              <p className="meta">
+                {selectedCount} {selectedCount === 1 ? "foto seleccionada" : "fotos seleccionadas"}
+              </p>
               <button type="button" className="btn btn-primary" onClick={onSendPreview} disabled={sendingPreview}>
-                {sendingPreview ? "Enviando..." : "Previsualizacion"}
+                {sendingPreview ? "Enviando..." : "Mostrar en pantalla"}
               </button>
             </div>
           ) : null}
+
           {scanStatus.message ? (
             <p className={scanStatus.type === "error" ? "status status-error" : "status status-success"} aria-live="polite">
               {scanStatus.message}
             </p>
           ) : null}
 
-          {scanMatches.length === 0 ? (
-            <p className="status">Todavia no hay resultados para mostrar.</p>
+          {!hasMatches ? (
+            <p className="status">Todavia no hay resultados. Captura un rostro para buscar.</p>
           ) : (
             <div className="scan-matches-grid">
               {scanMatches.map((match) => (
@@ -168,25 +162,18 @@ export default function ScanPlayerView({
                   }}
                   className={`scan-match-card ${selectedMatchKeys.includes(match.key) ? "scan-match-card-selected" : ""}`}
                   onClick={() => onToggleMatchSelection(match.key)}
+                  aria-label={`Foto ${match.displayNumber}${selectedMatchKeys.includes(match.key) ? ", seleccionada" : ""}`}
                 >
-                  <span className="scan-match-number" aria-label={`Referencia ${match.displayNumber}`}>
-                    #{match.displayNumber}
-                  </span>
                   <FallbackImage
                     src={match.url}
-                    alt={match.photoPath}
+                    alt={`Foto ${match.displayNumber}`}
                     className="scan-match-image"
                     fallbackLabel="Sin foto"
                     loading="lazy"
                     width="400"
                     height="300"
                   />
-                  <div className="scan-match-meta">
-                    <p className="scan-match-score">Similitud: {(match.similarity || 0).toFixed(3)}</p>
-                    <p className="scan-match-path" title={match.photoPath}>
-                      {match.photoPath}
-                    </p>
-                  </div>
+                  <span className="scan-match-number" aria-hidden="true">#{match.displayNumber}</span>
                 </button>
               ))}
             </div>

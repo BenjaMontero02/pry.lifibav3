@@ -5,6 +5,8 @@ const INVOKE_CHANNELS = new Set([
   "config:set-source-path",
   "config:pick-source-path",
   "config:list-source-photos",
+  "config:get-index-settings",
+  "config:set-index-settings",
   "sourcepad:get-watch-status",
   "sourcepad:rescan",
   "index:get-status",

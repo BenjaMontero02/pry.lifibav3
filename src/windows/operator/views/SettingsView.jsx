@@ -9,18 +9,26 @@ export default function SettingsView({
   statusClassName,
   onSourcePathChange,
   onPickFolder,
-  onSave
+  onSave,
+  faceSizePx,
+  faceDetScore,
+  indexLoading,
+  indexSaving,
+  indexStatus,
+  onFaceSizePxChange,
+  onFaceDetScoreChange,
+  onIndexSettingsSave
 }) {
   return (
     <article className="operator-card">
-      <p className="eyebrow">Operador Lifibav3</p>
-      <h1>Configuracion de Sourcepad</h1>
+      <p className="eyebrow">Configuracion inicial</p>
+      <h1>Carpeta de fotos</h1>
       <p className="intro">
-        Selecciona la carpeta local que se usara como sourcepad y guardala en la base de datos de la aplicacion.
+        Elegi la carpeta donde estan las fotos del evento. El sistema va a buscar todas las imagenes ahi.
       </p>
 
       <label className="field-label" htmlFor="sourcepad-path">
-        Ruta de la carpeta sourcepad
+        Ruta de la carpeta
       </label>
       <div className="path-row">
         <input
@@ -28,7 +36,7 @@ export default function SettingsView({
           className="path-input"
           value={sourcePath}
           onChange={(event) => onSourcePathChange(event.target.value)}
-          placeholder={loading ? "Cargando ruta actual..." : "Todavia no hay sourcepad seleccionado"}
+          placeholder={loading ? "Cargando..." : "Todavia no hay carpeta seleccionada"}
           disabled={loading || saving}
           autoComplete="off"
           spellCheck={false}
@@ -46,9 +54,9 @@ export default function SettingsView({
 
       <div className="actions">
         <button type="button" className="btn btn-primary" onClick={onSave} disabled={!canSave}>
-          {saving ? "Guardando..." : "Guardar en base de datos"}
+          {saving ? "Guardando..." : "Guardar configuracion"}
         </button>
-        <span className="meta">{hasChanges ? "Cambios sin guardar" : "Configuracion sincronizada"}</span>
+        <span className="meta">{hasChanges ? "Cambios sin guardar" : "Configuracion guardada"}</span>
       </div>
 
       {status.message ? (
@@ -56,6 +64,73 @@ export default function SettingsView({
           {status.message}
         </p>
       ) : null}
+
+      <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid var(--border)" }} />
+
+      <h2>Deteccion de rostros</h2>
+      <p className="intro">
+        Ajusta que tan precisa es la busqueda de rostros. Un valor bajo encuentra mas caras pero puede tener errores.
+        Un valor alto solo encuentra rostros muy claros.
+      </p>
+
+      {indexLoading ? (
+        <p className="meta">Cargando ajustes...</p>
+      ) : (
+        <>
+          <label className="field-label" htmlFor="face-size-slider">
+            Tamano minimo de rostro ({faceSizePx} px)
+          </label>
+          <input
+            id="face-size-slider"
+            className="settings-slider"
+            type="range"
+            min="10"
+            max="200"
+            step="1"
+            value={faceSizePx}
+            onChange={(event) => onFaceSizePxChange(Number(event.target.value))}
+          />
+          <div className="slider-labels">
+            <span>10 px (muy chicas)</span>
+            <span>200 px (solo grandes)</span>
+          </div>
+
+          <label className="field-label" htmlFor="det-score-slider">
+            Precision de deteccion ({faceDetScore.toFixed(2)})
+          </label>
+          <input
+            id="det-score-slider"
+            className="settings-slider"
+            type="range"
+            min="0.05"
+            max="0.99"
+            step="0.01"
+            value={faceDetScore}
+            onChange={(event) => onFaceDetScoreChange(Number(event.target.value))}
+          />
+          <div className="slider-labels">
+            <span>0.05 (menos preciso)</span>
+            <span>0.99 (mas preciso)</span>
+          </div>
+
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onIndexSettingsSave}
+              disabled={indexSaving}
+            >
+              {indexSaving ? "Guardando..." : "Guardar ajustes"}
+            </button>
+          </div>
+
+          {indexStatus.message ? (
+            <p className={`status ${indexStatus.type === "success" ? "status-success" : indexStatus.type === "error" ? "status-error" : ""}`} aria-live="polite">
+              {indexStatus.message}
+            </p>
+          ) : null}
+        </>
+      )}
     </article>
   );
 }

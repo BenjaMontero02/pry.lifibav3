@@ -6,7 +6,7 @@ import os
 import cv2
 import numpy as np
 
-from app.services.face_index_service import get_face_analyzer, load_index, normalize_embedding
+from app.services.face_index_service import extract_face_embedding, get_face_analyzer, load_index, normalize_embedding
 from app.services.file_service import load_json_file
 
 DEFAULT_SIMILARITY_THRESHOLD = 0.35
@@ -229,7 +229,7 @@ def _best_face_embedding(image):
     best_embedding = None
     best_score = -math.inf
     for face in faces:
-        embedding = normalize_embedding(getattr(face, "embedding", None))
+        embedding = extract_face_embedding(image, face)
         if embedding is None:
             continue
 

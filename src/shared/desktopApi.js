@@ -54,6 +54,12 @@ const browserDesktopApi = {
     if (channel === "config:pick-source-path") {
       return { canceled: true, value: null };
     }
+    if (channel === "config:get-index-settings") {
+      return { faceSizePx: 28, faceDetScore: 0.50 };
+    }
+    if (channel === "config:set-index-settings") {
+      return { faceSizePx: payload?.faceSizePx ?? 28, faceDetScore: payload?.faceDetScore ?? 0.50 };
+    }
     if (channel === "config:list-source-photos") {
       return {
         sourcePath: "",

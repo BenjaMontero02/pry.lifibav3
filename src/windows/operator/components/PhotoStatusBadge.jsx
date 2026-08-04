@@ -1,15 +1,19 @@
 const PHOTO_STATUS_LABELS = {
-  indexed: "Indexada",
-  no_faces: "Sin cara",
-  faces_filtered: "Cara descartada",
-  unreadable: "Ilegible",
+  indexed: "Lista",
+  no_faces: "Sin rostro",
+  faces_filtered: "Rostro no valido",
+  unreadable: "No se puede leer",
   error: "Error",
   pending: "Pendiente",
   unknown: "Sin estado"
 };
 
 const PHOTO_STATUS_TITLES = {
-  faces_filtered: "Se detectaron caras pero se descartaron por tamano o confianza insuficiente"
+  faces_filtered: "Se detecto un rostro pero no cumple con los criterios de calidad",
+  no_faces: "No se encontro ningun rostro en esta foto",
+  unreadable: "No se pudo abrir el archivo de imagen",
+  error: "Ocurrio un error al procesar esta foto",
+  pending: "Esta foto aun no fue procesada"
 };
 
 function getPhotoStatusLabel(status) {

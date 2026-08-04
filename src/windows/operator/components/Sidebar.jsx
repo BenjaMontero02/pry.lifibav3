@@ -4,7 +4,7 @@ export default function Sidebar({ brand, items, activeItemId, onSelectItem }) {
   return (
     <aside className="operator-sidebar">
       <p className="sidebar-brand">{brand}</p>
-      <nav className="sidebar-nav" aria-label="Secciones del operador">
+      <nav className="sidebar-nav" aria-label="Navegacion principal">
         {items.map((item) => (
           <SidebarNavButton
             key={item.id}
