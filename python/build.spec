@@ -51,7 +51,7 @@ else:
     )
 
 a = Analysis(
-    ["python/main.py"],
+    [os.path.join(SPECPATH, "main.py")],
     pathex=[],
     binaries=binaries,
     datas=datas,
