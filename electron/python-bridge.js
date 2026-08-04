@@ -39,8 +39,10 @@ function createPythonBridge() {
 
   const resolvePythonCommand = () => {
     if (app.isPackaged) {
+      const childBinary =
+        process.platform === "win32" ? "python-child.exe" : "python-child";
       return {
-        command: path.join(process.resourcesPath, "python", "python-child.exe"),
+        command: path.join(process.resourcesPath, "python", childBinary),
         args: []
       };
     }

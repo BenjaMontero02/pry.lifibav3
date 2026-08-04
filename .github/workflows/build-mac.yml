@@ -1,0 +1,71 @@
+name: Build macOS (dmg)
+
+# Compila el instalador .dmg en un runner macOS de GitHub.
+# No necesitas una Mac propia: el artefacto queda disponible para descargar.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-14 # Apple Silicon (arm64)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if [ -f python/requirements.txt ]; then
+            pip install -r python/requirements.txt
+          fi
+
+      # Descarga el modelo antelopev2 de InsightFace para que quede empaquetado
+      # (evita que la app intente descargarlo offline en el primer uso).
+      - name: Prefetch InsightFace models
+        run: |
+          python - <<'PY'
+          try:
+              from insightface.app import FaceAnalysis
+              FaceAnalysis(name="antelopev2")
+              print("antelopev2 ready")
+          except Exception as exc:  # noqa: BLE001
+              print(f"WARNING: could not prefetch models: {exc}")
+          PY
+
+      - name: Build (python + renderer + dmg)
+        run: pnpm run build
+
+      # Ejecuta el binario python-child ya empaquetado y verifica que arranca
+      # (carga insightface/onnxruntime/AdaFace) y responde al ping. Falla el CI
+      # aqui si el bundle esta roto, en vez de fallar al abrir la app.
+      - name: Smoke test packaged python-child
+        run: pnpm run smoke:child
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: LifibaV3-macos-dmg
+          path: release/*.dmg
+          if-no-files-found: warn
