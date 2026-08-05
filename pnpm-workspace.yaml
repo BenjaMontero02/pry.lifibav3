@@ -1,0 +1,20 @@
+# Layout plano de node_modules (estilo npm) en vez del arbol simbolico de .pnpm.
+#
+# electron-builder 24 recorre el node_modules raiz para recolectar las
+# dependencias de produccion y no resuelve la cadena de symlinks de .pnpm. Con
+# el linker "isolated" por defecto, las transitivas nativas de better-sqlite3
+# (bindings, file-uri-to-path) viven solo bajo node_modules/.pnpm/ y nunca
+# llegaban al asar: la app empaquetada moria al abrir con
+# "Cannot find module 'bindings'".
+#
+# Con hoisted quedan como directorios reales en la raiz, que es tambien lo que
+# asumen los patrones de asarUnpack en electron-builder.yml.
+#
+# Nota: este archivo requiere pnpm >= 10.6 (los settings de pnpm se leian antes
+# desde .npmrc). El workflow de CI esta fijado en consecuencia.
+nodeLinker: hoisted
+
+# pnpm >= 10 bloquea los scripts de build de dependencias salvo allowlist.
+# better-sqlite3 es nativo y compila en su script de install.
+onlyBuiltDependencies:
+  - better-sqlite3

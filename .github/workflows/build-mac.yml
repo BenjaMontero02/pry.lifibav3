@@ -20,10 +20,12 @@ jobs:
         with:
           node-version: "20"
 
+      # pnpm >= 10.6 es necesario para que se lea nodeLinker desde
+      # pnpm-workspace.yaml (ver comentarios en ese archivo).
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Setup Python
         uses: actions/setup-python@v5
