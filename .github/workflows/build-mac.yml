@@ -15,10 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Node >= 22.13 lo exige pnpm 11 (usa node:sqlite). Con Node 20 el
+      # binario de pnpm crashea al arrancar con ERR_UNKNOWN_BUILTIN_MODULE.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # pnpm >= 10.6 es necesario para que se lea nodeLinker desde
       # pnpm-workspace.yaml (ver comentarios en ese archivo).
