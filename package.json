@@ -1,6 +1,6 @@
 {
   "name": "lifibav3-desktop-scaffold",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Windows desktop scaffold with Electron, React, Tailwind v4, SQLite and Python child process bridge",
   "main": "electron/main.js",
   "author": "",

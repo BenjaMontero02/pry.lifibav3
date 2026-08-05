@@ -14,7 +14,11 @@
 # desde .npmrc). El workflow de CI esta fijado en consecuencia.
 nodeLinker: hoisted
 
-# pnpm >= 10 bloquea los scripts de build de dependencias salvo allowlist.
-# better-sqlite3 es nativo y compila en su script de install.
-onlyBuiltDependencies:
-  - better-sqlite3
+# pnpm >= 10 bloquea los scripts de build de dependencias y aborta el install
+# con ERR_PNPM_IGNORED_BUILDS si queda alguno sin declarar aqui. Los tres son
+# imprescindibles: better-sqlite3 compila el binding nativo, electron descarga
+# el binario del runtime y esbuild instala su binario de plataforma.
+allowBuilds:
+  better-sqlite3: true
+  electron: true
+  esbuild: true
