@@ -1,0 +1,79 @@
+name: Build Windows (exe)
+
+# Compila el instalador NSIS (.exe) en un runner Windows de GitHub.
+# Espejo de build-mac.yml: mismo toolchain, distinto target de electron-builder.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Git Bash: necesario para el heredoc de Python y el `if [ -f ]`.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node >= 22.13 lo exige pnpm 11 (usa node:sqlite). Con Node 20 el
+      # binario de pnpm crashea al arrancar con ERR_UNKNOWN_BUILTIN_MODULE.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # pnpm >= 10.6 es necesario para que se lea nodeLinker desde
+      # pnpm-workspace.yaml (ver comentarios en ese archivo).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if [ -f python/requirements.txt ]; then
+            pip install -r python/requirements.txt
+          fi
+
+      # Descarga el modelo antelopev2 de InsightFace para que quede empaquetado
+      # (evita que la app intente descargarlo offline en el primer uso).
+      - name: Prefetch InsightFace models
+        run: |
+          python - <<'PY'
+          try:
+              from insightface.app import FaceAnalysis
+              FaceAnalysis(name="antelopev2")
+              print("antelopev2 ready")
+          except Exception as exc:  # noqa: BLE001
+              print(f"WARNING: could not prefetch models: {exc}")
+          PY
+
+      - name: Build (python + renderer + nsis)
+        run: pnpm run build
+
+      # Ejecuta el binario python-child.exe ya empaquetado y verifica que arranca
+      # (carga insightface/onnxruntime/AdaFace) y responde al ping. Falla el CI
+      # aqui si el bundle esta roto, en vez de fallar al abrir la app.
+      - name: Smoke test packaged python-child
+        run: pnpm run smoke:child
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: LifibaV3-windows-exe
+          path: release/*.exe
+          if-no-files-found: warn
