@@ -7,7 +7,10 @@ import tailwindcss from "@tailwindcss/vite";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // En build las ventanas se cargan con file:// desde el asar, por eso los assets
+  // deben referenciarse de forma relativa al html.
+  base: command === "build" ? "./" : "/",
   plugins: [react(), tailwindcss()],
   server: {
     host: "127.0.0.1",
@@ -34,4 +37,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));
