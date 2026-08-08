@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="LifibaV3">
+  <rect width="256" height="256" rx="48" fill="#0f7b6c"/>
+  <path fill="#fffdf6" d="M64 56h34v104h94v32H64z"/>
+  <path fill="#fffdf6" d="M64 184h128v24H64z"/>
+  <circle cx="177" cy="80" r="24" fill="#f3c14b"/>
+</svg>

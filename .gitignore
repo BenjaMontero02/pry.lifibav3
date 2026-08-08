@@ -3,7 +3,10 @@ node_modules/
 .playwright-mcp/
 dist/
 release/
-build/
+# Solo el build/ de la raiz (PyInstaller). Sin la barra inicial esto tambien
+# ignoraba resources/build/, dejando el icon.ico fuera del repo y rompiendo el
+# empaquetado NSIS en CI.
+/build/
 __pycache__/
 *.pyc
 python/dist/
