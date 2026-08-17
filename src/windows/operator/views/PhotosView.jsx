@@ -92,7 +92,128 @@ function getChangeText(watchStatus) {
   return `Ultimo cambio: ${eventType}${filename} (${formatDateTime(timestamp)})`;
 }
 
-function SourcepadRuntimePanel({ watchStatus, thumbnailPrewarm }) {
+function getIndexStatusMeta({ hasSource, indexing, clearing, pending, errors, total }) {
+  if (!hasSource) {
+    return { label: "Sin carpeta", tone: "muted" };
+  }
+  if (clearing) {
+    return { label: "Limpiando", tone: "busy" };
+  }
+  if (indexing) {
+    return { label: "Indexando", tone: "busy" };
+  }
+  if (total === 0) {
+    return { label: "Sin fotos", tone: "muted" };
+  }
+  if (pending > 0) {
+    return { label: "Pendiente", tone: "busy" };
+  }
+  if (errors > 0) {
+    return { label: "Con errores", tone: "error" };
+  }
+  return { label: "Al dia", tone: "ok" };
+}
+
+function getIndexPanelHint({ hasSource, total }) {
+  if (!hasSource) {
+    return "No hay carpeta configurada. Elegi la carpeta del evento en Ajustes para poder indexar.";
+  }
+  if (total === 0) {
+    return "La carpeta no tiene fotos todavia.";
+  }
+  return "";
+}
+
+function IndexPanel({
+  photosPath,
+  photosLoading,
+  indexingPhotos,
+  indexingProgressPercent,
+  indexingProgressLabel,
+  indexingMessage,
+  clearingIndex,
+  currentIndexSummary,
+  onIndexPhotos,
+  onReindexAll,
+  onClearIndex
+}) {
+  const summary = currentIndexSummary || {};
+  const hasSource = Boolean(photosPath);
+  const pending = Number(summary.pendingPhotos || 0);
+  const total = Number(summary.totalPhotos || 0);
+  const errors = Number(summary.errorPhotos || 0) + Number(summary.unreadablePhotos || 0);
+  const busy = photosLoading || indexingPhotos || clearingIndex;
+  const actionsDisabled = !hasSource || busy;
+  const statusMeta = getIndexStatusMeta({
+    hasSource,
+    indexing: indexingPhotos,
+    clearing: clearingIndex,
+    pending,
+    errors,
+    total
+  });
+  const hint = getIndexPanelHint({ hasSource, total });
+
+  const indexLabel = indexingPhotos
+    ? "Analizando fotos..."
+    : pending > 0
+      ? `Indexar ${formatCount(pending)} pendientes`
+      : "Todo indexado";
+
+  return (
+    <section className="index-panel" aria-label="Catalogo de rostros">
+      <div className="index-panel-head">
+        <span className="index-panel-title">Catalogo de rostros</span>
+        <span className={`sourcepad-chip sourcepad-chip-${statusMeta.tone}`}>{statusMeta.label}</span>
+        <IndexSummary summary={summary} />
+      </div>
+
+      {hint ? <p className="index-panel-hint">{hint}</p> : null}
+
+      <div className="index-panel-actions">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => onIndexPhotos()}
+          disabled={actionsDisabled || pending === 0}
+        >
+          {indexLabel}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onReindexAll}
+          disabled={actionsDisabled || total === 0}
+        >
+          Reindexar todo
+        </button>
+        <button
+          type="button"
+          className="btn btn-danger"
+          onClick={onClearIndex}
+          disabled={actionsDisabled}
+        >
+          {clearingIndex ? "Limpiando..." : "Limpiar catalogo"}
+        </button>
+
+        {indexingPhotos ? (
+          <div className="index-progress" role="status" aria-live="polite">
+            <div className="index-progress-track" aria-hidden="true">
+              <span className="index-progress-bar" style={{ width: `${indexingProgressPercent}%` }} />
+            </div>
+            <p className="meta">{indexingProgressLabel}</p>
+          </div>
+        ) : indexingMessage ? (
+          <p className="status status-success index-panel-message" aria-live="polite">
+            {indexingMessage}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SourcepadDetails({ watchStatus, thumbnailPrewarm }) {
   const currentWatchStatus = watchStatus || {};
   const prewarm = thumbnailPrewarm || currentWatchStatus.thumbnailPrewarm || {};
   const watcherStatus = getWatcherStatusMeta(currentWatchStatus);
@@ -104,49 +225,49 @@ function SourcepadRuntimePanel({ watchStatus, thumbnailPrewarm }) {
   const pending = Number(prewarm.pending || 0);
 
   return (
-    <section className="sourcepad-runtime" aria-label="Estado de la carpeta y miniaturas">
-      <div className="sourcepad-runtime-grid">
-        <div className="sourcepad-runtime-panel">
-          <div className="sourcepad-runtime-head">
-            <span className="sourcepad-runtime-title">Carpeta</span>
-            <span className={`sourcepad-chip sourcepad-chip-${watcherStatus.tone}`}>
-              {watcherStatus.label}
-            </span>
+    <details className="sourcepad-details">
+      <summary className="sourcepad-details-summary">
+        <span className="sourcepad-details-title">Carpeta y miniaturas</span>
+        <span className={`sourcepad-chip sourcepad-chip-${watcherStatus.tone}`}>
+          Carpeta: {watcherStatus.label}
+        </span>
+        <span className={`sourcepad-chip sourcepad-chip-${prewarmStatus.tone}`}>
+          Miniaturas: {prewarmStatus.label}
+        </span>
+      </summary>
+
+      <div className="sourcepad-runtime">
+        <div className="sourcepad-runtime-grid">
+          <div className="sourcepad-runtime-panel">
+            <p className="sourcepad-runtime-line" title={getChangeText(currentWatchStatus)}>
+              {getChangeText(currentWatchStatus)}
+            </p>
+            <p className="meta">Ultima revision: {formatDateTime(currentWatchStatus.lastScannedAt)}</p>
           </div>
-          <p className="sourcepad-runtime-line" title={getChangeText(currentWatchStatus)}>
-            {getChangeText(currentWatchStatus)}
-          </p>
-          <p className="meta">Ultima revision: {formatDateTime(currentWatchStatus.lastScannedAt)}</p>
+
+          <div className="sourcepad-runtime-panel">
+            <div className="sourcepad-thumbnail-stats" aria-label="Progreso de miniaturas">
+              <span>
+                <strong>{formatCount(pending)}</strong>
+                <small>Pendientes</small>
+              </span>
+              <span>
+                <strong>{formatCount(completed)}</strong>
+                <small>Listas</small>
+              </span>
+              <span>
+                <strong>{formatCount(failed)}</strong>
+                <small>Fallidas</small>
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="sourcepad-runtime-panel">
-          <div className="sourcepad-runtime-head">
-            <span className="sourcepad-runtime-title">Miniaturas</span>
-            <span className={`sourcepad-chip sourcepad-chip-${prewarmStatus.tone}`}>
-              {prewarmStatus.label}
-            </span>
-          </div>
-          <div className="sourcepad-thumbnail-stats" aria-label="Progreso de miniaturas">
-            <span>
-              <strong>{formatCount(pending)}</strong>
-              <small>Pendientes</small>
-            </span>
-            <span>
-              <strong>{formatCount(completed)}</strong>
-              <small>Listas</small>
-            </span>
-            <span>
-              <strong>{formatCount(failed)}</strong>
-              <small>Fallidas</small>
-            </span>
-          </div>
-        </div>
+        <p className={`sourcepad-runtime-error${lastError ? " sourcepad-runtime-error-active" : ""}`}>
+          Ultimo error: <span>{lastError || "sin errores"}</span>
+        </p>
       </div>
-
-      <p className={`sourcepad-runtime-error${lastError ? " sourcepad-runtime-error-active" : ""}`}>
-        Ultimo error: <span>{lastError || "sin errores"}</span>
-      </p>
-    </section>
+    </details>
   );
 }
 
@@ -166,7 +287,9 @@ export default function PhotosView({
   currentIndexSummary,
   hasMorePhotos,
   photosScrollRef,
-  onUpdatePhotos,
+  onIndexPhotos,
+  onReindexAll,
+  onReloadPhotos,
   onClearIndex,
   onPhotosSearchSubmit,
   onPhotosSearchDraftChange,
@@ -189,9 +312,7 @@ export default function PhotosView({
   const currentTotal = Number(photosMeta.total || 0);
   const loadedCount = photos.length;
   const remainingCount = Math.max(0, currentTotal - loadedCount);
-  const toolbarCountText = isFilteringByStatus || hasActiveSearch
-    ? `${currentTotal} fotos en la vista - ${loadedCount} cargadas`
-    : `${currentTotal} fotos encontradas - ${loadedCount} cargadas`;
+  const toolbarCountText = `${formatCount(currentTotal)} fotos - ${formatCount(loadedCount)} cargadas`;
   const filterScopeText = hasActiveSearch
     ? "en la busqueda actual"
     : "en la carpeta";
@@ -214,115 +335,94 @@ export default function PhotosView({
 
   return (
     <article className="operator-card operator-card-photos">
-      <p className="eyebrow">Catalogo de fotos</p>
-      <h1>Fotos del evento</h1>
-      <p className="intro">
-        Todas las fotos encontradas en la carpeta del evento. Podes buscar por nombre y filtrar por estado.
-      </p>
+      <header className="photos-header">
+        <h1>Fotos del evento</h1>
+        <span className="meta">{photosPath ? toolbarCountText : "No hay carpeta configurada"}</span>
+      </header>
+
+      <IndexPanel
+        photosPath={photosPath}
+        photosLoading={photosLoading}
+        indexingPhotos={indexingPhotos}
+        indexingProgressPercent={indexingProgressPercent}
+        indexingProgressLabel={indexingProgressLabel}
+        indexingMessage={indexingMessage}
+        clearingIndex={clearingIndex}
+        currentIndexSummary={currentIndexSummary}
+        onIndexPhotos={onIndexPhotos}
+        onReindexAll={onReindexAll}
+        onClearIndex={onClearIndex}
+      />
 
       <div className="photos-toolbar">
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={onUpdatePhotos}
+          onClick={onReloadPhotos}
           disabled={photosLoading || indexingPhotos || clearingIndex}
         >
-          {indexingPhotos ? "Analizando fotos..." : "Actualizar fotos"}
+          {photosLoading ? "Recargando..." : "Recargar lista"}
         </button>
-        <button
-          type="button"
-          className="btn btn-danger"
-          onClick={onClearIndex}
-          disabled={photosLoading || indexingPhotos || clearingIndex}
-        >
-          {clearingIndex ? "Limpiando..." : "Limpiar catalogo"}
-        </button>
-        <span className="meta">
-          {photosPath
-            ? toolbarCountText
-            : "No hay carpeta configurada"}
-        </span>
-      </div>
 
-      <form
-        className="photos-search"
-        onSubmit={(event) => onPhotosSearchSubmit(event, { statusFilter: photoStatusFilter })}
-      >
-        <label className="field-label" htmlFor="photos-search-input">
-          Buscar
-        </label>
-        <input
-          id="photos-search-input"
-          className="path-input"
-          value={photosSearchDraft}
-          onChange={(event) => onPhotosSearchDraftChange(event.target.value)}
-          placeholder="Nombre de la foto"
-          autoComplete="off"
-          spellCheck={false}
-          name="photosSearch"
-        />
-        <button type="submit" className="btn btn-secondary" disabled={photosLoading || indexingPhotos}>
-          Buscar
-        </button>
-        {photosQuery ? (
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => onClearPhotosSearch({ statusFilter: photoStatusFilter })}
-            disabled={photosLoading || indexingPhotos}
-          >
-            Limpiar
+        <form
+          className="photos-search"
+          onSubmit={(event) => onPhotosSearchSubmit(event, { statusFilter: photoStatusFilter })}
+        >
+          <label className="field-label" htmlFor="photos-search-input">
+            Buscar
+          </label>
+          <input
+            id="photos-search-input"
+            className="path-input"
+            value={photosSearchDraft}
+            onChange={(event) => onPhotosSearchDraftChange(event.target.value)}
+            placeholder="Nombre de la foto"
+            autoComplete="off"
+            spellCheck={false}
+            name="photosSearch"
+          />
+          <button type="submit" className="btn btn-secondary" disabled={photosLoading || indexingPhotos}>
+            Buscar
           </button>
-        ) : null}
-      </form>
-
-      <div className="photos-filter-panel">
-        <div className="photos-status-filters" role="group" aria-label="Filtrar fotos por estado">
-          {PHOTO_STATUS_FILTERS.map((filter) => {
-            const isActive = photoStatusFilter === filter.id;
-            return (
-              <button
-                key={filter.id}
-                type="button"
-                className={`photos-filter-btn${isActive ? " photos-filter-btn-active" : ""}`}
-                onClick={() => handleStatusFilterSelect(filter.id)}
-                aria-pressed={isActive}
-              >
-                <span>{filter.label}</span>
-                <span className="photos-filter-count">{statusCounts[filter.id]}</span>
-              </button>
-            );
-          })}
-        </div>
-        <p className="photos-filter-note">
-          {activeFilterLabel}: {currentTotal} fotos {filterScopeText}. {loadedCount} cargadas
-          {hasMorePhotos ? ` (${remainingCount} restantes)` : "."}
-        </p>
+          {photosQuery ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => onClearPhotosSearch({ statusFilter: photoStatusFilter })}
+              disabled={photosLoading || indexingPhotos}
+            >
+              Limpiar
+            </button>
+          ) : null}
+        </form>
       </div>
 
-      <SourcepadRuntimePanel
+      <div className="photos-status-filters" role="group" aria-label="Filtrar fotos por estado">
+        {PHOTO_STATUS_FILTERS.map((filter) => {
+          const isActive = photoStatusFilter === filter.id;
+          return (
+            <button
+              key={filter.id}
+              type="button"
+              className={`photos-filter-btn${isActive ? " photos-filter-btn-active" : ""}`}
+              onClick={() => handleStatusFilterSelect(filter.id)}
+              aria-pressed={isActive}
+            >
+              <span>{filter.label}</span>
+              <span className="photos-filter-count">{statusCounts[filter.id]}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <SourcepadDetails
         watchStatus={sourcepadWatchStatus}
         thumbnailPrewarm={thumbnailPrewarm}
       />
 
-
-      {indexingPhotos ? (
-        <div className="index-progress" role="status" aria-live="polite">
-          <div className="index-progress-track" aria-hidden="true">
-            <span className="index-progress-bar" style={{ width: `${indexingProgressPercent}%` }} />
-          </div>
-          <p className="meta">{indexingProgressLabel}</p>
-        </div>
-      ) : null}
-
       {photosError ? (
         <p className="status status-error" aria-live="polite">
           {photosError}
-        </p>
-      ) : null}
-      {indexingMessage ? (
-        <p className="status status-success" aria-live="polite">
-          {indexingMessage}
         </p>
       ) : null}
 

@@ -37,8 +37,14 @@ win:
 mac:
   category: public.app-category.utilities
   # icon: icon.icns   # Opcional: agrega un .icns en resources/build para icono propio.
-  hardenedRuntime: true
+  # Sin cuenta Apple Developer no hay notarizacion, y hardenedRuntime sin
+  # entitlements firmados solo rompe el child de Python (PyInstaller carga
+  # dylibs sin firmar y onnxruntime usa memoria ejecutable). Va en false.
+  hardenedRuntime: false
   gatekeeperAssess: false
+  # Ad-hoc signing explicito: en Apple Silicon un binario sin firma alguna no
+  # arranca (killed: 9). No pasa Gatekeeper, pero para build local alcanza.
+  identity: "-"
   target:
     - target: dmg
       arch:

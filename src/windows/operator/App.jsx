@@ -85,7 +85,9 @@ export default function App() {
               currentIndexSummary={photos.currentIndexSummary}
               hasMorePhotos={photos.hasMorePhotos}
               photosScrollRef={photos.photosScrollRef}
-              onUpdatePhotos={photos.handleUpdatePhotos}
+              onIndexPhotos={photos.handleIndexPhotos}
+              onReindexAll={photos.handleReindexAll}
+              onReloadPhotos={photos.handleReloadPhotos}
               onClearIndex={photos.handleClearIndex}
               onPhotosSearchSubmit={photos.handlePhotosSearchSubmit}
               onPhotosSearchDraftChange={photos.setPhotosSearchDraft}

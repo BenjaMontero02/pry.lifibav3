@@ -458,14 +458,14 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     });
   }, [maybeLoadMorePhotos]);
 
-  const handleUpdatePhotos = useCallback(async () => {
+  const handleIndexPhotos = useCallback(async ({ force = false } = {}) => {
     setIndexingPhotos(true);
     setIndexingMessage("");
     setIndexingProgress(null);
     setPhotosError("");
 
     try {
-      const response = await desktopApi.sendToPython("index_photos", {});
+      const response = await desktopApi.sendToPython("index_photos", { forceReindex: force });
       const stats = response?.result?.stats || null;
       if (stats) {
         setIndexingMessage(
@@ -483,6 +483,21 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       setIndexingPhotos(false);
     }
   }, [desktopApi, loadPhotos, photosStatusFilter]);
+
+  const handleReindexAll = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Esto vuelve a analizar TODAS las fotos de la carpeta, incluidas las que ya estan listas. Puede demorar bastante. Continuar?"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    await handleIndexPhotos({ force: true });
+  }, [handleIndexPhotos]);
+
+  const handleReloadPhotos = useCallback(async () => {
+    await loadPhotos({ refresh: true, statusFilter: photosStatusFilter });
+  }, [loadPhotos, photosStatusFilter]);
 
   useEffect(() => {
     maybeLoadMorePhotos();
@@ -639,7 +654,9 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     hasMorePhotos,
     photosScrollRef,
     setPhotosSearchDraft,
-    handleUpdatePhotos,
+    handleIndexPhotos,
+    handleReindexAll,
+    handleReloadPhotos,
     handleClearIndex,
     handlePhotosSearchSubmit,
     handleClearPhotosSearch,
