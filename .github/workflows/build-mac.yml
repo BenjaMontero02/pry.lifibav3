@@ -45,25 +45,21 @@ jobs:
             pip install -r python/requirements.txt
           fi
 
-      # Descarga el modelo antelopev2 de InsightFace para que quede empaquetado
-      # (evita que la app intente descargarlo offline en el primer uso).
-      - name: Prefetch InsightFace models
-        run: |
-          python - <<'PY'
-          try:
-              from insightface.app import FaceAnalysis
-              FaceAnalysis(name="antelopev2")
-              print("antelopev2 ready")
-          except Exception as exc:  # noqa: BLE001
-              print(f"WARNING: could not prefetch models: {exc}")
-          PY
+      # Descarga y verifica todos los modelos declarados en scripts/models.json
+      # (antelopev2 + AdaFace ONNX) para que queden dentro del instalador. NO se
+      # captura el error: si un modelo falta o el sha256 no coincide, el build
+      # falla aca. Antes esto era un heredoc con try/except que imprimia un
+      # WARNING y seguia, y asi se publicaron instaladores sin modelos.
+      - name: Prepare face models
+        run: node scripts/prepare-models.cjs
 
       - name: Build (python + renderer + dmg)
         run: pnpm run build
 
-      # Ejecuta el binario python-child ya empaquetado y verifica que arranca
-      # (carga insightface/onnxruntime/AdaFace) y responde al ping. Falla el CI
-      # aqui si el bundle esta roto, en vez de fallar al abrir la app.
+      # Ejecuta el binario ya empaquetado y le pide self_check: construye el
+      # analizador facial adentro del bundle y exige que el detector haya
+      # cargado y que el backend de embeddings sea adaface. Falla el CI aqui si
+      # falta un modelo, en vez de entregar un instalador que no indexa.
       - name: Smoke test packaged python-child
         run: pnpm run smoke:child
 

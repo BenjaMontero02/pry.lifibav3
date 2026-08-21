@@ -68,3 +68,12 @@ def compute_embedding(image_bgr, face):
 
     outputs = session.run(None, {"input": blob})
     return normalize_embedding(outputs[0][0])
+
+
+def session_ok():
+    """True cuando la sesion ONNX de AdaFace carga realmente.
+
+    ``is_available()`` solo mira que el archivo exista; esto ejercita la carga,
+    que es lo que hay que verificar sobre un binario ya empaquetado.
+    """
+    return _get_session() is not None

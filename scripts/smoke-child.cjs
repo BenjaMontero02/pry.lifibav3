@@ -4,10 +4,14 @@
 // Runtime smoke for the packaged Python backend.
 //
 // Launches the frozen python-child binary (resources/python/) and sends a
-// single `ping` request. Because app/router.py imports the heavy native deps
-// (insightface / onnxruntime / AdaFace) at module load, a successful `pong`
-// proves the whole native stack loaded inside the bundle -- the exact failure
-// mode (missing dylibs / hidden imports) that only shows up at runtime.
+// `self_check` request, which builds the face analyzer inside the bundle and
+// reports which models actually loaded.
+//
+// `ping` was not enough: it only proved the native imports resolved, so a
+// bundle whose antelopev2 pack was empty (the CI failure that shipped .dmg and
+// .exe installers without models) passed the smoke and failed in the
+// operator's hands. This asserts the detector loaded AND that the intended
+// embedding backend is active, so a silent fallback also fails the build.
 //
 // Exits non-zero on any failure so CI catches broken bundles before shipping.
 
@@ -16,10 +20,16 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const ROOT = path.resolve(__dirname, "..");
-const TIMEOUT_MS = 30000;
+// Cargar antelopev2 + AdaFace dentro del bundle tarda decenas de segundos en
+// un runner de CI; 30s quedaba al filo.
+const TIMEOUT_MS = 120000;
 const isWindows = process.platform === "win32";
 const childBinary = isWindows ? "python-child.exe" : "python-child";
 const binaryPath = path.join(ROOT, "resources", "python", childBinary);
+// Debe coincidir con el backend previsto en face_index_service.py: si el
+// AdaFace ONNX no quedo empaquetado, el backend cae a "insightface" en
+// silencio, y eso tiene que romper el build.
+const EXPECTED_EMBEDDING_BACKEND = "adaface";
 
 function fail(message) {
   console.error(`[smoke:child] FAIL: ${message}`);
@@ -103,13 +113,53 @@ child.stdout.on("data", (chunk) => {
       continue;
     }
 
-    if (response.ok && response.result && response.result.pong === true) {
-      finish(() => pass("packaged python-child launched and responded to ping."));
-    } else {
+    if (!response.ok) {
       finish(() =>
-        fail(`unexpected ping response: ${JSON.stringify(response)}`)
+        fail(
+          `self_check failed: ${response.error || "(no message)"}
+` +
+            `stderr:
+${stderrBuffer.trim() || "(empty)"}`
+        )
+      );
+      return;
+    }
+
+    const result = response.result || {};
+    const problems = [];
+    if (result.detection !== true) {
+      problems.push(
+        `detector not loaded (loadedModels=${JSON.stringify(result.loadedModels)}, ` +
+          `modelDir=${String(result.detectionModelDir)})`
       );
     }
+    if (result.embeddingBackend !== EXPECTED_EMBEDDING_BACKEND) {
+      problems.push(
+        `embedding backend is "${String(result.embeddingBackend)}" instead of ` +
+          `"${EXPECTED_EMBEDDING_BACKEND}" (adafaceModelPresent=` +
+          `${String(result.adafaceModelPresent)}, adafaceSessionOk=` +
+          `${String(result.adafaceSessionOk)}) -- the bundle is missing a model`
+      );
+    }
+
+    if (problems.length > 0) {
+      finish(() =>
+        fail(
+          `${problems.join("; ")}
+stderr:
+${stderrBuffer.trim() || "(empty)"}`
+        )
+      );
+      return;
+    }
+
+    finish(() =>
+      pass(
+        `packaged python-child loaded its models (models=${JSON.stringify(
+          result.loadedModels
+        )}, embeddingBackend=${result.embeddingBackend}).`
+      )
+    );
     return;
   }
 });
@@ -125,5 +175,5 @@ child.on("exit", (code, signal) => {
 });
 
 child.stdin.write(
-  JSON.stringify({ requestId: "smoke-1", action: "ping", data: {} }) + "\n"
+  JSON.stringify({ requestId: "smoke-1", action: "self_check", data: {} }) + "\n"
 );

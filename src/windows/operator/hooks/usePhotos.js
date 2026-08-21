@@ -467,13 +467,19 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     try {
       const response = await desktopApi.sendToPython("index_photos", { forceReindex: force });
       const stats = response?.result?.stats || null;
-      if (stats) {
-        setIndexingMessage(
-          `Analisis completo: ${stats.processedPhotos} fotos revisadas, ${stats.newFacesIndexed} rostros encontrados.`
+      // Sin stats no hubo corrida: no se declara completo. Antes se mostraba
+      // "Analisis completo." ante cualquier respuesta anomala, que es como el
+      // fallo de carga de modelos quedaba invisible.
+      if (!stats) {
+        throw new Error(
+          `el backend no devolvio el resultado de la corrida${
+            response?.error ? `: ${response.error}` : "."
+          }`
         );
-      } else {
-        setIndexingMessage("Analisis completo.");
       }
+      setIndexingMessage(
+        `Analisis completo: ${stats.processedPhotos} fotos revisadas, ${stats.newFacesIndexed} rostros encontrados.`
+      );
       await loadPhotos({ refresh: true, statusFilter: photosStatusFilter });
     } catch (error) {
       setIndexingMessage("");

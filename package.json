@@ -13,10 +13,11 @@
     "smoke:ipc": "node scripts/smoke-ipc.cjs",
     "smoke:child": "node scripts/smoke-child.cjs",
     "postinstall": "electron-builder install-app-deps",
+    "prepare:models": "node scripts/prepare-models.cjs",
     "build:python": "node scripts/build-python.cjs",
     "build:renderer": "vite build",
     "build": "pnpm run build:python && pnpm run build:renderer && electron-builder --config electron-builder.yml --publish never",
-    "check:electron": "node --check electron/main.js && node --check electron/preload.js && node --check electron/python-bridge.js && node --check scripts/dev-electron.cjs && node --check scripts/smoke-dev.cjs && node --check scripts/smoke-ipc.cjs",
+    "check:electron": "node --check electron/main.js && node --check electron/preload.js && node --check electron/python-bridge.js && node --check scripts/dev-electron.cjs && node --check scripts/smoke-dev.cjs && node --check scripts/smoke-ipc.cjs && node --check scripts/smoke-child.cjs && node --check scripts/prepare-models.cjs",
     "check:python": "python -m compileall -q python",
     "check": "pnpm run check:electron && pnpm run check:python && pnpm run build:renderer",
     "preview": "vite preview"

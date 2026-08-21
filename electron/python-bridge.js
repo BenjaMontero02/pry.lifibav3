@@ -149,8 +149,15 @@ function createPythonBridge() {
 
     pending.delete(parsed.requestId);
     clearPendingTimer(pendingRequest);
-    if (parsed.error) {
-      pendingRequest.reject(new Error(parsed.error));
+
+    // Decidir por `ok`, no por si `error` es truthy: un error de mensaje vacio
+    // ("" es falsy) se resolvia como exito y el fallo llegaba mudo a la UI.
+    if (parsed.ok === false || parsed.error) {
+      const detail =
+        String(parsed.error || "").trim() ||
+        `El backend reporto un fallo sin mensaje (action: ${pendingRequest.action}, ` +
+          `requestId: ${parsed.requestId}).`;
+      pendingRequest.reject(new Error(detail));
       return;
     }
     pendingRequest.resolve(parsed);

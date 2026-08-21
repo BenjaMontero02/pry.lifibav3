@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "Manifiesto de modelos faciales que deben quedar dentro del instalador.",
+    "Lo consumen scripts/prepare-models.cjs (descarga + verificacion) y",
+    "python/build.spec (validacion antes de empaquetar). Editar aca, no en el codigo.",
+    "kind: 'zip-flatten' extrae aplanando (el zip de antelopev2 trae una carpeta",
+    "interna que insightface no aplana, y ese es el bug que rompia los builds de CI).",
+    "dest: '~/...' se expande al home del usuario; cualquier otra ruta es relativa",
+    "a la raiz del repo. sha256 se verifica siempre contra el archivo descargado."
+  ],
+  "models": [
+    {
+      "id": "antelopev2",
+      "kind": "zip-flatten",
+      "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip",
+      "sha256": "8e182f14fc6e80b3bfa375b33eb6cff7ee05d8ef7633e738d1c89021dcf0c5c5",
+      "bytes": 360662982,
+      "dest": "~/.insightface/models/antelopev2",
+      "bundleDir": "insightface_models/models/antelopev2",
+      "expectedFiles": [
+        "1k3d68.onnx",
+        "2d106det.onnx",
+        "genderage.onnx",
+        "glintr100.onnx",
+        "scrfd_10g_bnkps.onnx"
+      ]
+    },
+    {
+      "id": "adaface-ir101-webface12m",
+      "kind": "file",
+      "url": "https://github.com/BenjaMontero02/pry.lifibav3/releases/download/models-v1/adaface_ir101_webface12m.onnx",
+      "sha256": "36556268033749ed0779399a696c9ead051115bd68c595331c45abfd1c430766",
+      "bytes": 260696317,
+      "dest": "python/models",
+      "bundleDir": "adaface_models",
+      "expectedFiles": [
+        "adaface_ir101_webface12m.onnx"
+      ]
+    }
+  ]
+}

@@ -153,9 +153,23 @@ def _resolve_insightface_root():
         return None
 
     bundled_root = os.path.join(bundle_dir, "insightface_models")
-    if os.path.isdir(os.path.join(bundled_root, "models", DETECTION_MODEL_NAME)):
+    if _has_detection_onnx(os.path.join(bundled_root, "models", DETECTION_MODEL_NAME)):
         return bundled_root
     return None
+
+
+def _has_detection_onnx(pack_dir):
+    """True cuando el directorio del pack tiene .onnx en el nivel esperado.
+
+    Chequear solo ``isdir`` no alcanza: el zip de antelopev2 trae una carpeta
+    interna con el mismo nombre, y ``insightface.utils.storage.download()`` no
+    la aplana. Eso deja un directorio que existe pero cuyos .onnx viven un
+    nivel mas abajo de donde ``FaceAnalysis`` hace glob, y el fallo llega como
+    un ``assert`` sin mensaje.
+    """
+    if not os.path.isdir(pack_dir):
+        return False
+    return any(name.lower().endswith(".onnx") for name in os.listdir(pack_dir))
 
 
 def get_face_analyzer(det_size=DEFAULT_DET_SIZE):
@@ -181,6 +195,35 @@ def get_face_analyzer(det_size=DEFAULT_DET_SIZE):
     insightface_root = _resolve_insightface_root()
     if insightface_root:
         analyzer_kwargs["root"] = insightface_root
+    elif getattr(sys, "frozen", False):
+        # Empaquetado y sin pack de deteccion utilizable: FaceAnalysis reventaria
+        # con un `assert` sin mensaje (o intentaria descargar dentro de _MEIPASS,
+        # que es de solo lectura). Fallar aca con texto explicito.
+        raise RuntimeError(
+            "El pack de deteccion '{name}' no esta dentro del instalador (se esperaba "
+            "{path} con archivos .onnx). El instalador se genero sin modelos: hay que "
+            "reconstruirlo con `node scripts/prepare-models.cjs` antes de empaquetar.".format(
+                name=DETECTION_MODEL_NAME,
+                path=os.path.join(
+                    getattr(sys, "_MEIPASS", "<bundle>"),
+                    "insightface_models",
+                    "models",
+                    DETECTION_MODEL_NAME,
+                ),
+            )
+        )
+    else:
+        dev_pack_dir = os.path.join(
+            os.path.expanduser("~"), ".insightface", "models", DETECTION_MODEL_NAME
+        )
+        if not _has_detection_onnx(dev_pack_dir):
+            raise RuntimeError(
+                "El pack de deteccion '{name}' falta o esta mal estructurado en {path} "
+                "(no hay archivos .onnx en ese nivel). Corre "
+                "`node scripts/prepare-models.cjs`.".format(
+                    name=DETECTION_MODEL_NAME, path=dev_pack_dir
+                )
+            )
 
     with redirect_stdout_to_stderr():
         analyzer = FaceAnalysis(**analyzer_kwargs)
