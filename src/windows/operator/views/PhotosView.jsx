@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import IndexSummary from "../components/IndexSummary";
+import PhotoErrorDetail from "../components/PhotoErrorDetail";
 import PhotoRow from "../components/PhotoRow";
 
 const PHOTO_STATUS_FILTERS = [
@@ -133,11 +134,14 @@ function IndexPanel({
   indexingMessage,
   clearingIndex,
   currentIndexSummary,
+  errorFilterActive,
   onIndexPhotos,
   onReindexAll,
-  onClearIndex
+  onClearIndex,
+  onShowErrorPhotos
 }) {
   const summary = currentIndexSummary || {};
+  const errorSamples = Array.isArray(summary.errorSamples) ? summary.errorSamples : [];
   const hasSource = Boolean(photosPath);
   const pending = Number(summary.pendingPhotos || 0);
   const total = Number(summary.totalPhotos || 0);
@@ -169,6 +173,36 @@ function IndexPanel({
       </div>
 
       {hint ? <p className="index-panel-hint">{hint}</p> : null}
+
+      {errors > 0 ? (
+        <div className="index-error-panel" role="alert">
+          <div className="index-error-panel-head">
+            <span className="index-error-panel-title">
+              {formatCount(errors)} {errors === 1 ? "foto no se pudo indexar" : "fotos no se pudieron indexar"}
+            </span>
+            {typeof onShowErrorPhotos === "function" && !errorFilterActive ? (
+              <button type="button" className="btn btn-secondary btn-inline" onClick={onShowErrorPhotos}>
+                Ver solo con error
+              </button>
+            ) : null}
+          </div>
+
+          {errorSamples.length > 0 ? (
+            errorSamples.map((sample) => (
+              <PhotoErrorDetail
+                key={sample.message}
+                message={sample.message}
+                label={`${formatCount(sample.count)} ${Number(sample.count) === 1 ? "foto" : "fotos"}`}
+              />
+            ))
+          ) : (
+            <p className="index-panel-hint">
+              Sin mensaje registrado (las fotos que no se pueden leer no traen uno). Desplega el estado
+              en la lista para ver el detalle por foto, o reindexa para que se registre la causa.
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <div className="index-panel-actions">
         <button
@@ -349,9 +383,11 @@ export default function PhotosView({
         indexingMessage={indexingMessage}
         clearingIndex={clearingIndex}
         currentIndexSummary={currentIndexSummary}
+        errorFilterActive={photoStatusFilter === "error"}
         onIndexPhotos={onIndexPhotos}
         onReindexAll={onReindexAll}
         onClearIndex={onClearIndex}
+        onShowErrorPhotos={() => handleStatusFilterSelect("error")}
       />
 
       <div className="photos-toolbar">

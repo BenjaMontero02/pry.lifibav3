@@ -1,10 +1,13 @@
 import os
+import sys
 import time
+import traceback
 
 import cv2
 import faiss
 import numpy as np
 
+from app.errors import describe_error_with_origin
 from app.progress import write_progress_event
 from app.services.face_index_service import (
     create_empty_index,
@@ -22,6 +25,10 @@ from app.services.file_service import (
 )
 
 SAVE_CHECKPOINT_EVERY = 25
+# Cuantos tracebacks completos se escriben a stderr por corrida. Cuando falla
+# cada foto por la misma causa (modelo ausente, backend roto) uno alcanza; el
+# resto solo inflaria el log del bridge.
+STDERR_TRACEBACK_LIMIT = 3
 PROGRESS_EVENT_EVERY = 25
 PROGRESS_VERBOSE_LIMIT = 50
 ALWAYS_EMIT_PROGRESS_STATUSES = {"error", "missing_file", "unreadable"}
@@ -413,6 +420,8 @@ def index_photos(data, request_id):
     failed_photos = 0
     artifact_write_counts = {"index": 0, "vectors": 0, "manifest": 0}
 
+    tracebacks_written = 0
+
     analyzer = None
     has_processing_work = any(
         file_signatures.get(photo_path) is not None
@@ -599,12 +608,23 @@ def index_photos(data, request_id):
             )
         except Exception as error:
             failed_photos += 1
+            # El mensaje viaja al manifest -> photo_index_status.last_error -> UI,
+            # asi que tiene que bastar por si solo: tipo de excepcion (nunca
+            # vacio) y la frame donde revento.
+            described_error = describe_error_with_origin(error)
+            if tracebacks_written < STDERR_TRACEBACK_LIMIT:
+                tracebacks_written += 1
+                sys.stderr.write(
+                    "index_photos fallo en {path}:\n{trace}".format(
+                        path=photo_path, trace=traceback.format_exc()
+                    )
+                )
             photos_state[photo_path] = {
                 "mtime_ns": signature["mtime_ns"],
                 "size": signature["size"],
                 "faces_detected": 0,
                 "status": "error",
-                "error": str(error),
+                "error": described_error,
                 "indexed_at": int(time.time()),
             }
             dirty_manifest = True
@@ -616,7 +636,7 @@ def index_photos(data, request_id):
                 "error",
                 0,
                 change_type,
-                error=error,
+                error=described_error,
             )
 
         if processed_photos % SAVE_CHECKPOINT_EVERY == 0:

@@ -33,10 +33,28 @@ function getPhotoStatusClassName(status) {
   return "photo-status";
 }
 
-export default function PhotoStatusBadge({ status, lastError = "" }) {
+export default function PhotoStatusBadge({ status, lastError = "", expanded = false, onToggle = null }) {
+  const label = getPhotoStatusLabel(status);
+  const className = getPhotoStatusClassName(status);
+
+  if (typeof onToggle !== "function") {
+    return (
+      <p className={className} title={lastError || PHOTO_STATUS_TITLES[status] || ""}>
+        {label}
+      </p>
+    );
+  }
+
   return (
-    <p className={getPhotoStatusClassName(status)} title={lastError || PHOTO_STATUS_TITLES[status] || ""}>
-      {getPhotoStatusLabel(status)}
-    </p>
+    <button
+      type="button"
+      className={`${className} photo-status-toggle`}
+      onClick={onToggle}
+      aria-expanded={expanded}
+      title={expanded ? "Ocultar el detalle del error" : "Ver el detalle del error"}
+    >
+      {label}
+      <span aria-hidden="true" className="photo-status-caret">{expanded ? "▴" : "▾"}</span>
+    </button>
   );
 }

@@ -1,8 +1,12 @@
+import { useState } from "react";
+import PhotoErrorDetail from "./PhotoErrorDetail";
 import PhotoStatusBadge from "./PhotoStatusBadge";
 import FallbackImage from "../../../shared/FallbackImage";
 
 export default function PhotoRow({ photo, displayIndex, onOpen }) {
+  const [errorExpanded, setErrorExpanded] = useState(false);
   const canOpen = typeof onOpen === "function";
+  const lastError = String(photo.lastError || "").trim();
   const handleOpen = () => {
     if (canOpen) {
       onOpen(photo);
@@ -36,7 +40,13 @@ export default function PhotoRow({ photo, displayIndex, onOpen }) {
           {photo.name}
         </button>
       </p>
-      <PhotoStatusBadge status={photo.indexedStatus} lastError={photo.lastError || ""} />
+      <PhotoStatusBadge
+        status={photo.indexedStatus}
+        lastError={lastError}
+        expanded={errorExpanded}
+        onToggle={lastError ? () => setErrorExpanded((current) => !current) : null}
+      />
+      {lastError && errorExpanded ? <PhotoErrorDetail message={lastError} /> : null}
     </article>
   );
 }

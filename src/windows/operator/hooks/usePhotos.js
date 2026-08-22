@@ -29,7 +29,8 @@ export const EMPTY_INDEX_SUMMARY = Object.freeze({
   unreadablePhotos: 0,
   errorPhotos: 0,
   pendingPhotos: 0,
-  statusCounts: EMPTY_PHOTO_STATUS_COUNTS
+  statusCounts: EMPTY_PHOTO_STATUS_COUNTS,
+  errorSamples: []
 });
 
 export const EMPTY_THUMBNAIL_PREWARM = Object.freeze({

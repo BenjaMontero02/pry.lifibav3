@@ -1,21 +1,8 @@
 import json
 import sys
 
+from app.errors import describe_error
 from app.router import handle_action
-
-
-def _describe_error(error):
-    """Mensaje de error nunca vacio.
-
-    Un ``assert`` sin texto (lo que lanza insightface cuando no encuentra los
-    modelos) daba ``str(error) == ""``, y del otro lado del puente ese string
-    vacio era falsy: el fallo se reportaba como exito y el operador veia
-    "Analisis completo." sin haber indexado nada.
-    """
-    message = str(error).strip()
-    if message:
-        return "{name}: {message}".format(name=type(error).__name__, message=message)
-    return "{name} (sin mensaje)".format(name=type(error).__name__)
 
 
 def main():
@@ -37,7 +24,7 @@ def main():
             response = {
                 "requestId": request_id,
                 "ok": False,
-                "error": _describe_error(error),
+                "error": describe_error(error),
             }
 
         sys.stdout.write(json.dumps(response) + "\n")

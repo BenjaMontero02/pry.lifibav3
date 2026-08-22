@@ -1004,7 +1004,50 @@ function registerSourceThumbnailProtocol() {
   });
 }
 
-function createPhotoIndexSummaryFromGroupedRows(rows, totalPhotos = 0) {
+// Mensajes de error distintos que se devuelven al renderer. Cuando falla el
+// indexado entero (modelo ausente, backend roto) todas las fotos comparten el
+// mismo mensaje: con los primeros basta para diagnosticar sin abrir foto por foto.
+const PHOTO_ERROR_SAMPLE_LIMIT = 3;
+
+function toPhotoErrorSamples(countsByMessage) {
+  return [...countsByMessage.entries()]
+    .map(([message, count]) => ({ message, count }))
+    .sort((left, right) => right.count - left.count || left.message.localeCompare(right.message))
+    .slice(0, PHOTO_ERROR_SAMPLE_LIMIT);
+}
+
+function createPhotoErrorSamplesFromStatusRows(rows) {
+  const countsByMessage = new Map();
+  for (const row of rows) {
+    const message = String(row?.last_error || "").trim();
+    if (!message) {
+      continue;
+    }
+    countsByMessage.set(message, (countsByMessage.get(message) || 0) + 1);
+  }
+  return toPhotoErrorSamples(countsByMessage);
+}
+
+function loadPhotoErrorSamples(sourcePath) {
+  const rows = db
+    .prepare(
+      `
+        SELECT last_error AS message, COUNT(*) AS count
+        FROM ${PHOTO_INDEX_STATUS_TABLE}
+        WHERE source_path = ?
+          AND last_error IS NOT NULL
+          AND TRIM(last_error) <> ''
+        GROUP BY last_error
+        ORDER BY count DESC
+        LIMIT ${PHOTO_ERROR_SAMPLE_LIMIT}
+      `
+    )
+    .all(normalizeSourcePath(sourcePath));
+
+  return rows.map((row) => ({ message: String(row.message), count: Number(row.count || 0) }));
+}
+
+function createPhotoIndexSummaryFromGroupedRows(rows, totalPhotos = 0, errorSamples = []) {
   const byStatus = {};
   let tracked = 0;
   let lastErrorPhotos = 0;
@@ -1039,7 +1082,8 @@ function createPhotoIndexSummaryFromGroupedRows(rows, totalPhotos = 0) {
       no_faces: byStatus.no_faces || 0,
       faces_filtered: byStatus.faces_filtered || 0,
       error: errorPhotos + unreadablePhotos
-    }
+    },
+    errorSamples
   };
 }
 
@@ -1060,7 +1104,11 @@ function createPhotoIndexSummaryFromStatusRows(rows, totalPhotos = 0) {
     groupedRowsByStatus.set(status, groupedRow);
   }
 
-  return createPhotoIndexSummaryFromGroupedRows([...groupedRowsByStatus.values()], totalPhotos);
+  return createPhotoIndexSummaryFromGroupedRows(
+    [...groupedRowsByStatus.values()],
+    totalPhotos,
+    createPhotoErrorSamplesFromStatusRows(rows)
+  );
 }
 
 function getPhotoIndexSummary(sourcePath, totalPhotos = 0) {
@@ -1077,7 +1125,11 @@ function getPhotoIndexSummary(sourcePath, totalPhotos = 0) {
     )
     .all(normalizedSourcePath);
 
-  return createPhotoIndexSummaryFromGroupedRows(rows, totalPhotos);
+  return createPhotoIndexSummaryFromGroupedRows(
+    rows,
+    totalPhotos,
+    loadPhotoErrorSamples(normalizedSourcePath)
+  );
 }
 
 function createEmptyPhotoIndexSummary() {
@@ -1097,7 +1149,8 @@ function createEmptyPhotoIndexSummary() {
       no_faces: 0,
       faces_filtered: 0,
       error: 0
-    }
+    },
+    errorSamples: []
   };
 }
 

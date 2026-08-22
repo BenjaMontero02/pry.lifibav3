@@ -705,6 +705,117 @@ body {
   font-size: 0.8125rem;
 }
 
+/* Panel de errores de indexado: el mensaje que viene de Python (manifest ->
+   photo_index_status.last_error) tiene que poder leerse y copiarse sin abrir
+   una consola, que en el build empaquetado no existe. */
+.index-error-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--danger);
+  background: rgba(220, 38, 38, 0.06);
+  padding: 0.55rem 0.65rem;
+}
+
+.index-error-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.index-error-panel-title {
+  min-width: 0;
+  color: var(--danger-deep);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.index-error-panel-head .btn-inline {
+  margin-left: auto;
+}
+
+.btn-inline {
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.8125rem;
+}
+
+.photo-status-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.photo-status-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.photo-status-caret {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.photo-error-detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  padding: 0.45rem 0.55rem;
+}
+
+.photo-error-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.photo-error-detail-label {
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.photo-error-copy-btn {
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-paper);
+  color: var(--ink);
+  padding: 0.2rem 0.65rem;
+  cursor: pointer;
+  font: 700 0.75rem var(--font-sans);
+}
+
+.photo-error-copy-btn:hover,
+.photo-error-copy-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
+.photo-error-detail-text {
+  margin: 0;
+  max-height: 11rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: 500 0.78rem var(--font-mono);
+  user-select: text;
+}
+
 .index-panel-actions {
   display: flex;
   flex-wrap: wrap;
