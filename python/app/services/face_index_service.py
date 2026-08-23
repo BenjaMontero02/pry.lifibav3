@@ -46,6 +46,18 @@ def get_face_model_name():
         return "adaface_ir101_webface12m"
     return DETECTION_MODEL_NAME
 
+# Modulos del pack antelopev2 que se cargan. El pack trae tambien
+# ``landmark_3d_68`` y ``genderage``, que este proyecto no usa: solo hacen falta
+# el detector (bbox + kps) y, para el backend de fallback, ``recognition``.
+#
+# Cargarlos ademas rompia el indexado empaquetado: ``landmark_3d_68`` lee
+# ``meanshape_68.pkl`` con ``insightface.data.get_object()``, que en un binario
+# congelado busca en ``sys._MEIPASS/objects/`` y devuelve None -sin excepcion-
+# si no esta. Con ``mean_lmk = None``, ``estimate_affine_matrix_3d23d`` reventaba
+# con AttributeError en CADA cara de CADA foto. Restringir los modulos saca la
+# causa de raiz y ahorra dos inferencias ONNX por cara.
+ALLOWED_MODULES = ["detection", "recognition"]
+
 DEFAULT_DET_SIZE = (640, 640)
 _face_analyzer = None
 _face_analyzer_det_size = None
@@ -191,7 +203,11 @@ def get_face_analyzer(det_size=DEFAULT_DET_SIZE):
             _face_analyzer_det_size = det_size
         return _face_analyzer
 
-    analyzer_kwargs = {"name": DETECTION_MODEL_NAME, "providers": ["CPUExecutionProvider"]}
+    analyzer_kwargs = {
+        "name": DETECTION_MODEL_NAME,
+        "allowed_modules": list(ALLOWED_MODULES),
+        "providers": ["CPUExecutionProvider"],
+    }
     insightface_root = _resolve_insightface_root()
     if insightface_root:
         analyzer_kwargs["root"] = insightface_root

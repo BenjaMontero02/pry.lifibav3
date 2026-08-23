@@ -30,6 +30,10 @@ const binaryPath = path.join(ROOT, "resources", "python", childBinary);
 // AdaFace ONNX no quedo empaquetado, el backend cae a "insightface" en
 // silencio, y eso tiene que romper el build.
 const EXPECTED_EMBEDDING_BACKEND = "adaface";
+// Debe coincidir con ALLOWED_MODULES de face_index_service.py. Cargar modulos
+// de mas no es cosmetico: landmark_3d_68 reventaba en cada cara porque su
+// meanshape_68.pkl no quedaba donde lo busca el binario congelado.
+const EXPECTED_LOADED_MODULES = ["detection", "recognition"];
 
 function fail(message) {
   console.error(`[smoke:child] FAIL: ${message}`);
@@ -139,6 +143,23 @@ ${stderrBuffer.trim() || "(empty)"}`
           `"${EXPECTED_EMBEDDING_BACKEND}" (adafaceModelPresent=` +
           `${String(result.adafaceModelPresent)}, adafaceSessionOk=` +
           `${String(result.adafaceSessionOk)}) -- the bundle is missing a model`
+      );
+    }
+
+    const loadedModules = Array.isArray(result.loadedModels) ? [...result.loadedModels].sort() : [];
+    if (loadedModules.join(",") !== [...EXPECTED_LOADED_MODULES].sort().join(",")) {
+      problems.push(
+        `loaded modules are ${JSON.stringify(loadedModules)} instead of ` +
+          `${JSON.stringify([...EXPECTED_LOADED_MODULES].sort())} ` +
+          `(unexpected=${JSON.stringify(result.unexpectedModules)})`
+      );
+    }
+    // get_object() devuelve None en vez de fallar, asi que sin esta asercion un
+    // bundle sin los data objects vuelve a pasar el smoke y romper en runtime.
+    if (result.dataObjectsOk !== true) {
+      problems.push(
+        "insightface data objects missing from the bundle: get_object(\"meanshape_68.pkl\") " +
+          "returned None (expected under <bundle>/objects/)"
       );
     }
 

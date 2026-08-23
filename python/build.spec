@@ -3,6 +3,7 @@
 import json
 import os
 
+import insightface
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
@@ -16,6 +17,33 @@ for package_name in ("insightface", "onnxruntime"):
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+# ``insightface.data.get_object()`` (lo usa landmark_3d_68 para leer
+# meanshape_68.pkl) resuelve su directorio como ``sys._MEIPASS/objects`` cuando
+# corre congelado, no como ``insightface/data/objects``, que es donde lo deja
+# collect_all. Sin esta copia devuelve None SIN excepcion y el fallo aparece
+# recien al procesar caras (AttributeError sobre mean_lmk=None en cada foto).
+INSIGHTFACE_OBJECTS_DIR = os.path.join(
+    os.path.dirname(insightface.__file__), "data", "objects"
+)
+insightface_objects = (
+    sorted(os.listdir(INSIGHTFACE_OBJECTS_DIR))
+    if os.path.isdir(INSIGHTFACE_OBJECTS_DIR)
+    else []
+)
+if not insightface_objects:
+    raise SystemExit(
+        "build.spec: no hay data objects de insightface en {path}. El bundle "
+        "quedaria sin meanshape_68.pkl y cualquier modulo que lo use fallaria "
+        "en runtime.".format(path=INSIGHTFACE_OBJECTS_DIR)
+    )
+for object_name in insightface_objects:
+    datas.append((os.path.join(INSIGHTFACE_OBJECTS_DIR, object_name), "objects"))
+print(
+    "build.spec: data objects de insightface OK -> objects ({names})".format(
+        names=", ".join(insightface_objects)
+    )
+)
 
 # Los modelos faciales se empaquetan SIEMPRE dentro del ejecutable: en runtime
 # viven bajo sys._MEIPASS, que es de solo lectura, asi que no hay descarga

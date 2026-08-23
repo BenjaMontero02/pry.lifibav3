@@ -11,11 +11,27 @@ el renderer.
 
 from app.services import adaface_service
 from app.services.face_index_service import (
+    ALLOWED_MODULES,
     DETECTION_MODEL_NAME,
     get_embedding_backend,
     get_face_analyzer,
     get_face_model_name,
+    redirect_stdout_to_stderr,
 )
+
+
+def _data_objects_ok():
+    """True cuando ``insightface.data.get_object`` encuentra su meanshape.
+
+    Es el archivo que en el bundle vivia en el lugar equivocado: get_object lo
+    busca en ``sys._MEIPASS/objects/`` y devuelve None sin excepcion si falta,
+    asi que el bundle roto solo se notaba al procesar caras. El redirect es
+    obligatorio: get_object imprime a stdout, que es el canal del protocolo JSON.
+    """
+    from insightface.data import get_object
+
+    with redirect_stdout_to_stderr():
+        return get_object("meanshape_68.pkl") is not None
 
 
 def self_check(_data=None, _request_id=None):
@@ -25,6 +41,11 @@ def self_check(_data=None, _request_id=None):
     return {
         "detection": "detection" in loaded_models,
         "loadedModels": loaded_models,
+        "allowedModules": sorted(ALLOWED_MODULES),
+        "unexpectedModules": [
+            name for name in loaded_models if name not in ALLOWED_MODULES
+        ],
+        "dataObjectsOk": _data_objects_ok(),
         "detectionModelName": DETECTION_MODEL_NAME,
         "detectionModelDir": analyzer.model_dir,
         "embeddingBackend": get_embedding_backend(),
