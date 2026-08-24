@@ -109,6 +109,7 @@ export default function App() {
               selectedMatchKeys={scan.selectedMatchKeys}
               selectedMatches={scan.selectedMatches}
               sendingPreview={scan.sendingPreview}
+              printingPhotos={scan.printingPhotos}
               scanStatus={scan.scanStatus}
               jumpToMatchValue={scan.jumpToMatchValue}
               jumpToMatchFeedback={scan.jumpToMatchFeedback}
@@ -123,6 +124,9 @@ export default function App() {
               onJumpToMatchValueChange={scan.setJumpToMatchValue}
               onJumpToMatch={scan.handleJumpToMatch}
               onSendPreview={scan.handleSendPreview}
+              onPrintSelected={scan.handlePrintSelected}
+              onSelectAllMatches={scan.handleSelectAllMatches}
+              onClearMatchSelection={scan.handleClearMatchSelection}
               onToggleMatchSelection={scan.toggleMatchSelection}
             />
           ) : activeView === "diagnostics" ? (

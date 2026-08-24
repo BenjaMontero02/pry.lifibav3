@@ -12,6 +12,7 @@ export default function ScanPlayerView({
   selectedMatchKeys,
   selectedMatches,
   sendingPreview,
+  printingPhotos,
   scanStatus,
   jumpToMatchValue,
   jumpToMatchFeedback,
@@ -26,6 +27,9 @@ export default function ScanPlayerView({
   onJumpToMatchValueChange,
   onJumpToMatch,
   onSendPreview,
+  onPrintSelected,
+  onSelectAllMatches,
+  onClearMatchSelection,
   onToggleMatchSelection
 }) {
   const hasMatches = scanMatches.length > 0;
@@ -128,13 +132,48 @@ export default function ScanPlayerView({
             </p>
           ) : null}
 
-          {selectedCount > 0 ? (
+          {hasMatches ? (
             <div className="scan-preview-cta">
               <p className="meta">
-                {selectedCount} {selectedCount === 1 ? "foto seleccionada" : "fotos seleccionadas"}
+                {selectedCount === 0
+                  ? "Toca las fotos para elegir las que se imprimen"
+                  : `${selectedCount} ${selectedCount === 1 ? "foto seleccionada" : "fotos seleccionadas"}`}
               </p>
-              <button type="button" className="btn btn-primary" onClick={onSendPreview} disabled={sendingPreview}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onSelectAllMatches}
+                disabled={selectedCount === scanMatches.length}
+              >
+                Seleccionar todas
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onClearMatchSelection}
+                disabled={selectedCount === 0}
+              >
+                Limpiar seleccion
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onSendPreview}
+                disabled={selectedCount === 0 || sendingPreview || printingPhotos}
+              >
                 {sendingPreview ? "Enviando..." : "Mostrar en pantalla"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onPrintSelected}
+                disabled={selectedCount === 0 || printingPhotos || sendingPreview}
+              >
+                {printingPhotos
+                  ? "Preparando impresion..."
+                  : selectedCount > 1
+                    ? `Imprimir ${selectedCount} fotos`
+                    : "Imprimir foto"}
               </button>
             </div>
           ) : null}

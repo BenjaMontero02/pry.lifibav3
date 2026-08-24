@@ -90,6 +90,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const [scanMatches, setScanMatches] = useState([]);
   const [selectedMatchKeys, setSelectedMatchKeys] = useState([]);
   const [sendingPreview, setSendingPreview] = useState(false);
+  const [printingPhotos, setPrintingPhotos] = useState(false);
   const [scanThreshold, setScanThreshold] = useState(DEFAULT_SIMILARITY_THRESHOLD);
   const [scanVideoReady, setScanVideoReady] = useState(false);
   const [scanCameraActive, setScanCameraActive] = useState(false);
@@ -366,6 +367,47 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     }
   }, [desktopApi, selectedMatches]);
 
+  const handlePrintSelected = useCallback(async () => {
+    if (selectedMatches.length === 0) {
+      return;
+    }
+
+    setPrintingPhotos(true);
+    try {
+      const result = await desktopApi.invoke("print:send", {
+        photos: selectedMatches.map((match) => ({ photoPath: match.photoPath }))
+      });
+
+      if (result?.cancelled) {
+        setScanStatus({ type: "idle", message: "Impresion cancelada." });
+        return;
+      }
+
+      const count = Number(result?.count || selectedMatches.length);
+      const skipped = Number(result?.skipped || 0);
+      const skippedText = skipped > 0 ? ` (${skipped} se omitieron porque no se encontraron)` : "";
+      setScanStatus({
+        type: "success",
+        message: `${count} ${count === 1 ? "foto enviada" : "fotos enviadas"} a la impresora${skippedText}.`
+      });
+    } catch (error) {
+      setScanStatus({
+        type: "error",
+        message: `No se pudo imprimir: ${String(error.message || error)}`
+      });
+    } finally {
+      setPrintingPhotos(false);
+    }
+  }, [desktopApi, selectedMatches]);
+
+  const handleSelectAllMatches = useCallback(() => {
+    setSelectedMatchKeys(scanMatches.map((match) => match.key));
+  }, [scanMatches]);
+
+  const handleClearMatchSelection = useCallback(() => {
+    setSelectedMatchKeys([]);
+  }, []);
+
   const handleToggleScanCamera = useCallback(() => {
     setScanCameraEnabled((current) => !current);
   }, []);
@@ -392,6 +434,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     selectedMatchKeys,
     selectedMatches,
     sendingPreview,
+    printingPhotos,
     scanStatus,
     jumpToMatchValue,
     jumpToMatchFeedback,
@@ -406,6 +449,9 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     handleScanVideoLoadedMetadata,
     handleJumpToMatch,
     handleSendPreview,
+    handlePrintSelected,
+    handleSelectAllMatches,
+    handleClearMatchSelection,
     toggleMatchSelection,
     clearMatches
   };

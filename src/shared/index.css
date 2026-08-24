@@ -1138,8 +1138,9 @@ body {
 
 .scan-preview-cta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.6rem;
   margin-bottom: 0.55rem;
   padding: 0.6rem 0.75rem;
@@ -1150,6 +1151,7 @@ body {
 }
 
 .scan-preview-cta .meta {
+  flex: 1 1 12rem;
   color: var(--ink);
   font-weight: 600;
 }

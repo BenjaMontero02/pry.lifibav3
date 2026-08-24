@@ -5,6 +5,7 @@ const { createHash } = require("crypto");
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, screen, shell } = require("electron");
 const Database = require("better-sqlite3");
 const { createPythonBridge } = require("./python-bridge");
+const { printPhotos } = require("./print-service");
 
 let db = null;
 let pythonBridge = null;
@@ -1527,6 +1528,45 @@ function registerIpc() {
       throw new Error(openError);
     }
     return { opened: true, path: result.realPhotoPath };
+  });
+
+  ipcMain.handle("print:send", async (_event, payload) => {
+    const requestedPhotos = Array.isArray(payload?.photos) ? payload.photos : [];
+    const photoPaths = [];
+    const seenPaths = new Set();
+    let skipped = 0;
+
+    for (const photo of requestedPhotos) {
+      const candidatePath = typeof photo === "string" ? photo : String(photo?.photoPath || "");
+      if (!candidatePath) {
+        skipped += 1;
+        continue;
+      }
+
+      const result = validateSourceImagePath(candidatePath);
+      if (!result.ok) {
+        skipped += 1;
+        continue;
+      }
+      if (seenPaths.has(result.realPhotoPath)) {
+        continue;
+      }
+      seenPaths.add(result.realPhotoPath);
+      photoPaths.push(result.realPhotoPath);
+    }
+
+    if (photoPaths.length === 0) {
+      throw new Error("Ninguna de las fotos seleccionadas existe dentro de la carpeta configurada.");
+    }
+
+    const parentWindow = operatorWindow && !operatorWindow.isDestroyed() ? operatorWindow : null;
+    const result = await printPhotos({ photoPaths, parentWindow });
+
+    return {
+      ...result,
+      count: photoPaths.length,
+      skipped
+    };
   });
 
   ipcMain.handle("player:set-preview-photos", async (_event, payload) => {

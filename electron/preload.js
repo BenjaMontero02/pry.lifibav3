@@ -13,7 +13,8 @@ const INVOKE_CHANNELS = new Set([
   "index:clear",
   "photos:open-external",
   "player:set-preview-photos",
-  "player:get-preview-photos"
+  "player:get-preview-photos",
+  "print:send"
 ]);
 const EVENT_CHANNELS = new Set([
   "python:progress",
