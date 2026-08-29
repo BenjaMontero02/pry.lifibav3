@@ -1069,10 +1069,32 @@ body {
 
 /* ── Scan Player ─────────────────────────────────── */
 
+/* ── Scan Player ─────────────────────────────────────
+   Vista de 14": el alto util es ~720px CSS, asi que cada bloque de chrome
+   apilado se paga en fotos que el operador no ve. Titulo y toolbar comparten
+   fila, las acciones se anclan al pie y la camara cede ancho al llegar
+   resultados. */
+
 .operator-card-scan {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: clamp(0.9rem, 1.6vw, 1.3rem);
+  gap: 0.75rem;
+}
+
+.scan-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+
+.operator-card-scan h1 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 1.3rem;
+  line-height: 1.2;
 }
 
 .scan-toolbar {
@@ -1082,15 +1104,20 @@ body {
   gap: 0.6rem;
 }
 
+.scan-toolbar .field-label {
+  margin-bottom: 0;
+}
+
 .scan-select,
 .scan-threshold {
-  min-height: 3rem;
+  min-height: 2.75rem;
   border-radius: var(--radius-control);
   border: 1px solid var(--border-strong);
   background: var(--bg-paper);
   color: var(--ink);
   padding: 0 0.75rem;
   font: 600 0.9rem var(--font-sans);
+  max-width: 14rem;
 }
 
 .scan-select:focus-visible,
@@ -1101,12 +1128,17 @@ body {
 }
 
 .scan-layout {
-  margin-top: 0.9rem;
   min-height: 0;
   flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.85rem;
+  transition: grid-template-columns 260ms ease;
+}
+
+/* El mode shift: con resultados la camara queda como ficha para reapuntar. */
+.scan-layout-compact {
+  grid-template-columns: 240px minmax(0, 1fr);
 }
 
 .scan-preview,
@@ -1118,12 +1150,23 @@ body {
   min-height: 0;
 }
 
+.scan-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-content: start;
+}
+
 .scan-video {
   width: 100%;
   border-radius: 8px;
   aspect-ratio: 4 / 3;
   object-fit: cover;
   background: var(--surface);
+}
+
+.scan-preview-hint {
+  margin: 0;
 }
 
 .scan-canvas {
@@ -1134,43 +1177,36 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  gap: 0.55rem;
 }
 
-.scan-preview-cta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.6rem;
-  margin-bottom: 0.55rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: var(--radius-control);
-  border: 1px solid rgba(37, 99, 235, 0.35);
-  background: var(--bg-paper);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-}
-
-.scan-preview-cta .meta {
-  flex: 1 1 12rem;
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.scan-jump-row {
+/* Encabezado del panel: el conteo reemplaza al label "Resultados" y el salto
+   a foto viaja en la misma fila. */
+.scan-results-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
 }
 
-.scan-jump-row .field-label {
+.scan-results-count {
+  margin: 0;
+  margin-right: auto;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-results-head .field-label {
   margin-bottom: 0;
 }
 
 .scan-jump-input {
-  width: 7rem;
-  min-height: 3rem;
+  width: 5.5rem;
+  min-height: 2.75rem;
   border-radius: var(--radius-control);
   border: 1px solid var(--border-strong);
   background: var(--bg-paper);
@@ -1185,14 +1221,47 @@ body {
   outline: none;
 }
 
+/* Compacto solo para acciones de apoyo; las decisiones (imprimir, mostrar)
+   conservan el target de 48px. */
+.btn-compact {
+  min-height: 2.75rem;
+  padding: 0 0.85rem;
+}
+
+.scan-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.scan-empty-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.scan-empty .meta {
+  margin: 0;
+  max-width: 34ch;
+}
+
 /* Firma: selección tipo pizarra — la tarjeta elegida lleva anillo azul,
    check sólido y ficha de número en azul. Rellenos sólidos: se leen al sol. */
 
 .scan-matches-grid {
-  margin-top: 0.5rem;
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 0.5rem;
   overflow: auto;
   padding: 0.2rem 0.2rem 0.2rem 0.1rem;
 }
@@ -1210,21 +1279,21 @@ body {
   transition: transform 140ms ease, box-shadow 160ms ease, border-color 160ms ease;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   content-visibility: auto;
-  contain-intrinsic-size: 200px;
+  contain-intrinsic-size: 140px;
   touch-action: manipulation;
 }
 
 .scan-match-number {
   position: absolute;
-  left: 0.45rem;
-  bottom: 0.45rem;
+  left: 0.4rem;
+  bottom: 0.4rem;
   z-index: 2;
   border-radius: 999px;
   border: 2px solid rgba(255, 255, 255, 0.9);
   background: rgba(17, 24, 39, 0.88);
   color: #FFFFFF;
-  padding: 0.16rem 0.5rem;
-  font-size: 0.875rem;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1250,18 +1319,18 @@ body {
 .scan-match-card-selected::after {
   content: "✓";
   position: absolute;
-  top: 0.45rem;
-  right: 0.45rem;
+  top: 0.4rem;
+  right: 0.4rem;
   z-index: 2;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 1.5rem;
+  height: 1.5rem;
   border-radius: 50%;
   border: 2px solid #FFFFFF;
   background: var(--accent);
   color: #FFFFFF;
   display: grid;
   place-items: center;
-  font-size: 1rem;
+  font-size: 0.9rem;
   font-weight: 700;
   line-height: 1;
   box-shadow: 0 2px 6px rgba(16, 24, 40, 0.25);
@@ -1277,6 +1346,40 @@ body {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   display: block;
+}
+
+/* Pie de acciones: una sola fila, siempre visible, sin tapar la grilla. */
+.scan-actions {
+  flex-shrink: 0;
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--radius-control);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: var(--bg-paper);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+
+.scan-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.scan-selection-count {
+  margin: 0;
+  margin-right: auto;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-actions-feedback {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 /* ── Diagnostics ─────────────────────────────────── */
@@ -1650,17 +1753,27 @@ body {
     white-space: normal;
   }
 
-  .scan-layout {
+  .scan-layout,
+  .scan-layout-compact {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .scan-preview-cta {
-    flex-direction: column;
-    align-items: flex-start;
+  /* Angosto: la camara se achata a una tira. Sigue visible a proposito —
+     ocultarla haria que "Capturar y buscar" lea un frame muerto del video. */
+  .scan-layout-compact .scan-video {
+    width: auto;
+    max-height: 20vh;
+    margin: 0 auto;
   }
 
-  .scan-jump-row {
-    align-items: flex-start;
+  .scan-actions-row {
+    align-items: stretch;
+  }
+
+  .scan-selection-count {
+    flex: 1 0 100%;
+    margin-right: 0;
   }
 
   .photo-row {

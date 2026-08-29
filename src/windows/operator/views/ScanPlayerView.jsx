@@ -34,47 +34,49 @@ export default function ScanPlayerView({
 }) {
   const hasMatches = scanMatches.length > 0;
   const selectedCount = selectedMatches.length;
+  const feedback = jumpToMatchFeedback.message ? jumpToMatchFeedback : scanStatus;
 
   return (
     <article className="operator-card operator-card-scan">
-      <p className="eyebrow">Busqueda facial</p>
-      <h1>Escanear jugador</h1>
-      <p className="intro">
-        Captura el rostro del jugador con la camara y encontra todas sus fotos del evento.
-      </p>
+      {/* Titulo y controles de camara comparten fila: en 14" cada bloque
+          apilado le come una fila entera de fotos a la grilla. */}
+      <header className="scan-head">
+        <h1>Escanear jugador</h1>
+        <div className="scan-toolbar">
+          <label className="field-label" htmlFor="camera-select">
+            Camara
+          </label>
+          <select
+            id="camera-select"
+            className="scan-select"
+            value={selectedCameraId}
+            onChange={(event) => onSelectedCameraIdChange(event.target.value)}
+            name="cameraId"
+          >
+            {availableCameras.length === 0 ? <option value="">Camara por defecto</option> : null}
+            {availableCameras.map((camera, index) => (
+              <option key={camera.deviceId || String(index)} value={camera.deviceId || ""}>
+                {camera.label || `Camara ${index + 1}`}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-secondary" onClick={onToggleCamera} disabled={scanCameraStarting}>
+            {scanCameraStarting ? "Encendiendo..." : scanCameraActive ? "Apagar camara" : "Prender camara"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onCaptureAndSearch}
+            disabled={!scanCameraActive || !scanVideoReady || scanInProgress}
+          >
+            {scanInProgress ? "Buscando..." : "Capturar y buscar"}
+          </button>
+        </div>
+      </header>
 
-      <div className="scan-toolbar">
-        <label className="field-label" htmlFor="camera-select">
-          Camara
-        </label>
-        <select
-          id="camera-select"
-          className="scan-select"
-          value={selectedCameraId}
-          onChange={(event) => onSelectedCameraIdChange(event.target.value)}
-          name="cameraId"
-        >
-          {availableCameras.length === 0 ? <option value="">Camara por defecto</option> : null}
-          {availableCameras.map((camera, index) => (
-            <option key={camera.deviceId || String(index)} value={camera.deviceId || ""}>
-              {camera.label || `Camara ${index + 1}`}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="btn btn-secondary" onClick={onToggleCamera} disabled={scanCameraStarting}>
-          {scanCameraStarting ? "Encendiendo..." : scanCameraActive ? "Apagar camara" : "Prender camara"}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onCaptureAndSearch}
-          disabled={!scanCameraActive || !scanVideoReady || scanInProgress}
-        >
-          {scanInProgress ? "Buscando..." : "Capturar y buscar"}
-        </button>
-      </div>
-
-      <div className="scan-layout">
+      {/* Con resultados la camara se achica a una ficha para apuntar de nuevo:
+          la pantalla pasa a ser de las fotos, que es lo que se esta eligiendo. */}
+      <div className={`scan-layout ${hasMatches ? "scan-layout-compact" : ""}`}>
         <div className="scan-preview">
           <video
             id="scan-video"
@@ -86,16 +88,17 @@ export default function ScanPlayerView({
             onLoadedMetadata={onVideoLoadedMetadata}
           />
           {scanCameraStarting || (scanCameraActive && !scanVideoReady) ? (
-            <p className="meta">Inicializando camara...</p>
+            <p className="meta scan-preview-hint">Inicializando camara...</p>
           ) : null}
           <canvas id="scan-canvas" ref={scanCanvasRef} className="scan-canvas" aria-hidden="true" />
         </div>
 
-        <div className="scan-results" style={{ position: "relative" }}>
-          <p className="field-label">Resultados</p>
-
+        <div className="scan-results">
           {hasMatches ? (
-            <div className="scan-jump-row">
+            <div className="scan-results-head">
+              <p className="scan-results-count">
+                {scanMatches.length} {scanMatches.length === 1 ? "foto encontrada" : "fotos encontradas"}
+              </p>
               <label className="field-label" htmlFor="jump-to-match-input">
                 Ir a foto #
               </label>
@@ -117,75 +120,25 @@ export default function ScanPlayerView({
                 }}
                 placeholder="Ej: 4"
               />
-              <button type="button" className="btn btn-secondary" onClick={onJumpToMatch}>
+              <button type="button" className="btn btn-secondary btn-compact" onClick={onJumpToMatch}>
                 Ir
               </button>
             </div>
           ) : null}
 
-          {jumpToMatchFeedback.message ? (
-            <p
-              className={jumpToMatchFeedback.type === "error" ? "status status-error" : "status status-success"}
-              aria-live="polite"
-            >
-              {jumpToMatchFeedback.message}
-            </p>
-          ) : null}
-
-          {hasMatches ? (
-            <div className="scan-preview-cta">
-              <p className="meta">
-                {selectedCount === 0
-                  ? "Toca las fotos para elegir las que se imprimen"
-                  : `${selectedCount} ${selectedCount === 1 ? "foto seleccionada" : "fotos seleccionadas"}`}
-              </p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={onSelectAllMatches}
-                disabled={selectedCount === scanMatches.length}
-              >
-                Seleccionar todas
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={onClearMatchSelection}
-                disabled={selectedCount === 0}
-              >
-                Limpiar seleccion
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={onSendPreview}
-                disabled={selectedCount === 0 || sendingPreview || printingPhotos}
-              >
-                {sendingPreview ? "Enviando..." : "Mostrar en pantalla"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={onPrintSelected}
-                disabled={selectedCount === 0 || printingPhotos || sendingPreview}
-              >
-                {printingPhotos
-                  ? "Preparando impresion..."
-                  : selectedCount > 1
-                    ? `Imprimir ${selectedCount} fotos`
-                    : "Imprimir foto"}
-              </button>
-            </div>
-          ) : null}
-
-          {scanStatus.message ? (
-            <p className={scanStatus.type === "error" ? "status status-error" : "status status-success"} aria-live="polite">
-              {scanStatus.message}
-            </p>
-          ) : null}
-
           {!hasMatches ? (
-            <p className="status">Todavia no hay resultados. Captura un rostro para buscar.</p>
+            <div className="scan-empty">
+              <p className="scan-empty-title">Todavia no hay fotos</p>
+              <p className="meta">Captura un rostro con la camara para buscar las fotos del jugador.</p>
+              {scanStatus.message ? (
+                <p
+                  className={scanStatus.type === "error" ? "status status-error" : "status status-success"}
+                  aria-live="polite"
+                >
+                  {scanStatus.message}
+                </p>
+              ) : null}
+            </div>
           ) : (
             <div className="scan-matches-grid">
               {scanMatches.map((match) => (
@@ -201,7 +154,8 @@ export default function ScanPlayerView({
                   }}
                   className={`scan-match-card ${selectedMatchKeys.includes(match.key) ? "scan-match-card-selected" : ""}`}
                   onClick={() => onToggleMatchSelection(match.key)}
-                  aria-label={`Foto ${match.displayNumber}${selectedMatchKeys.includes(match.key) ? ", seleccionada" : ""}`}
+                  aria-pressed={selectedMatchKeys.includes(match.key)}
+                  aria-label={`Foto ${match.displayNumber}`}
                 >
                   <FallbackImage
                     src={match.url}
@@ -217,6 +171,62 @@ export default function ScanPlayerView({
               ))}
             </div>
           )}
+
+          {/* Las acciones van al pie del panel, no arriba: primero se eligen las
+              fotos y despues se actua, y asi no empujan la grilla hacia abajo. */}
+          {hasMatches ? (
+            <div className="scan-actions">
+              {feedback.message ? (
+                <p
+                  className={`scan-actions-feedback ${feedback.type === "error" ? "status-error" : "status-success"}`}
+                  aria-live="polite"
+                >
+                  {feedback.message}
+                </p>
+              ) : null}
+              <div className="scan-actions-row">
+                <p className="scan-selection-count" aria-live="polite">
+                  {selectedCount === 0 ? "Toca las fotos para elegir" : `${selectedCount} elegidas`}
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  onClick={onSelectAllMatches}
+                  disabled={selectedCount === scanMatches.length}
+                >
+                  Todas
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  onClick={onClearMatchSelection}
+                  disabled={selectedCount === 0}
+                >
+                  Ninguna
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={onSendPreview}
+                  disabled={selectedCount === 0 || sendingPreview || printingPhotos}
+                >
+                  {sendingPreview ? "Enviando..." : "Mostrar en pantalla"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onPrintSelected}
+                  disabled={selectedCount === 0 || printingPhotos || sendingPreview}
+                >
+                  {printingPhotos
+                    ? "Preparando..."
+                    : selectedCount > 1
+                      ? `Imprimir ${selectedCount} fotos`
+                      : "Imprimir foto"}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </article>
