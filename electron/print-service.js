@@ -160,8 +160,16 @@ async function printPhotos({ photoPaths, parentWindow = null } = {}) {
 
   try {
     printWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    await printWindow.loadFile(documentPath);
-    await waitForLoad(printWindow);
+    // El waiter se engancha antes de disparar la carga: si esperamos a que
+    // loadFile() resuelva, did-finish-load ya se disparo y el listener nunca
+    // se entera, asi que la impresion moria por timeout sin abrir el dialogo.
+    const loaded = waitForLoad(printWindow);
+    await Promise.all([
+      // loadFile rechaza ante un fallo de carga; el motivo real lo informa
+      // did-fail-load a traves del waiter, con mensaje para el operador.
+      printWindow.loadFile(documentPath).catch(() => undefined),
+      loaded
+    ]);
 
     const brokenImages = await countBrokenImages(printWindow);
     if (brokenImages >= paths.length) {
