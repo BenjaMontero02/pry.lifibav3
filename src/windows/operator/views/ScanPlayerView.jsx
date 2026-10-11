@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import FallbackImage from "../../../shared/FallbackImage";
+import isEditableTarget from "../../../shared/isEditableTarget";
 
 export default function ScanPlayerView({
   availableCameras,
@@ -15,6 +17,7 @@ export default function ScanPlayerView({
   selectedMatches,
   sendingPreview,
   printingPhotos,
+  clearingPlayer,
   scanStatus,
   jumpToMatchValue,
   jumpToMatchFeedback,
@@ -31,12 +34,80 @@ export default function ScanPlayerView({
   onJumpToMatch,
   onSendPreview,
   onPrintSelected,
+  onNewPlayer,
   onSelectAllMatches,
   onClearMatchSelection,
   onToggleMatchSelection
 }) {
   const hasMatches = scanMatches.length > 0;
   const selectedCount = selectedMatches.length;
+  const canCapture = scanCameraActive && scanVideoReady && !scanInProgress && !indexingPhotos;
+  const canPrint = selectedCount > 0 && !printingPhotos && !sendingPreview;
+  const canNewPlayer = !clearingPlayer && !printingPhotos;
+
+  // Atajos solo mientras esta vista esta montada. Se ignoran si el foco esta en
+  // un campo de texto o select (ahi Ctrl+Enter/Esc tienen su propio uso).
+  // Las teclas reservadas siempre frenan la accion nativa (Ctrl+P abriria la
+  // impresion de la ventana), aunque la accion no este disponible ahora.
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.defaultPrevented || event.repeat || isEditableTarget(event.target)) {
+        return;
+      }
+      const key = String(event.key || "").toLowerCase();
+      const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
+
+      if (ctrl && !event.shiftKey && key === "enter") {
+        event.preventDefault();
+        if (canCapture) {
+          onCaptureAndSearch();
+        }
+        return;
+      }
+      if (ctrl && !event.shiftKey && key === "p") {
+        event.preventDefault();
+        if (canPrint) {
+          onPrintSelected();
+        }
+        return;
+      }
+      if (ctrl && event.shiftKey && key === "a") {
+        event.preventDefault();
+        if (hasMatches && selectedCount < scanMatches.length) {
+          onSelectAllMatches();
+        }
+        return;
+      }
+      if (ctrl && !event.shiftKey && key === "n") {
+        event.preventDefault();
+        if (canNewPlayer) {
+          onNewPlayer();
+        }
+        return;
+      }
+      if (!ctrl && !event.shiftKey && key === "escape" && selectedCount > 0) {
+        event.preventDefault();
+        onClearMatchSelection();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    canCapture,
+    canNewPlayer,
+    canPrint,
+    hasMatches,
+    onCaptureAndSearch,
+    onClearMatchSelection,
+    onNewPlayer,
+    onPrintSelected,
+    onSelectAllMatches,
+    scanMatches.length,
+    selectedCount
+  ]);
 
   return (
     <article className="operator-card operator-card-scan">
@@ -44,6 +115,10 @@ export default function ScanPlayerView({
       <h1>Escanear jugador</h1>
       <p className="intro">
         Captura el rostro del jugador con la camara y encontra todas sus fotos del evento.
+      </p>
+      <p className="scan-shortcuts">
+        Atajos: Ctrl+Enter capturar y buscar · Ctrl+P imprimir · Ctrl+Shift+A seleccionar todas · Esc
+        limpiar seleccion · Ctrl+N nuevo jugador
       </p>
 
       <div className="scan-toolbar">
@@ -71,9 +146,19 @@ export default function ScanPlayerView({
           type="button"
           className="btn btn-primary"
           onClick={onCaptureAndSearch}
-          disabled={!scanCameraActive || !scanVideoReady || scanInProgress || indexingPhotos}
+          disabled={!canCapture}
+          title="Atajo: Ctrl+Enter"
         >
           {scanInProgress ? "Buscando..." : "Capturar y buscar"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onNewPlayer}
+          disabled={!canNewPlayer}
+          title="Atajo: Ctrl+N. Vacia la pantalla del jugador y los resultados"
+        >
+          {clearingPlayer ? "Limpiando..." : "Nuevo jugador"}
         </button>
       </div>
 
@@ -186,6 +271,7 @@ export default function ScanPlayerView({
                 className="btn btn-secondary"
                 onClick={onSelectAllMatches}
                 disabled={selectedCount === scanMatches.length}
+                title="Atajo: Ctrl+Shift+A"
               >
                 Seleccionar todas
               </button>
@@ -194,6 +280,7 @@ export default function ScanPlayerView({
                 className="btn btn-secondary"
                 onClick={onClearMatchSelection}
                 disabled={selectedCount === 0}
+                title="Atajo: Esc"
               >
                 Limpiar seleccion
               </button>
@@ -209,10 +296,11 @@ export default function ScanPlayerView({
                 type="button"
                 className="btn btn-primary"
                 onClick={onPrintSelected}
-                disabled={selectedCount === 0 || printingPhotos || sendingPreview}
+                disabled={!canPrint}
+                title="Atajo: Ctrl+P"
               >
                 {printingPhotos
-                  ? "Preparando impresion..."
+                  ? "Confirmá en el diálogo..."
                   : selectedCount > 1
                     ? `Imprimir ${selectedCount} fotos`
                     : "Imprimir foto"}
@@ -243,7 +331,8 @@ export default function ScanPlayerView({
                   }}
                   className={`scan-match-card ${selectedMatchKeys.includes(match.key) ? "scan-match-card-selected" : ""}`}
                   onClick={() => onToggleMatchSelection(match.key)}
-                  aria-label={`Foto ${match.displayNumber}${selectedMatchKeys.includes(match.key) ? ", seleccionada" : ""}`}
+                  aria-pressed={selectedMatchKeys.includes(match.key)}
+                  aria-label={`Foto ${match.displayNumber}`}
                 >
                   <FallbackImage
                     src={match.thumbUrl}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildSourcePhotoUrl, buildSourceThumbUrl } from "../../../shared/sourceUrls";
 
 // Mismo default que python/app/actions/find_player.py. Sin calibrar con fotos
 // reales del evento: el operador lo ajusta desde la pantalla Escanear.
@@ -71,14 +72,6 @@ function getCameraErrorMessage(error) {
   return `No se pudo iniciar la webcam: ${String(error?.message || error)}`;
 }
 
-function buildSourcePhotoUrl(filePath) {
-  return `sourcephoto://${encodeURIComponent(filePath)}`;
-}
-
-function buildSourceThumbUrl(filePath) {
-  return `sourcethumb://${encodeURIComponent(filePath)}`;
-}
-
 function captureVideoFrame(videoElement, canvasElement) {
   const sourceWidth = videoElement.videoWidth || 1280;
   const sourceHeight = videoElement.videoHeight || 720;
@@ -140,6 +133,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const [scanCameraActive, setScanCameraActive] = useState(false);
   const [scanCameraStarting, setScanCameraStarting] = useState(false);
   const [scanCameraEnabled, setScanCameraEnabled] = useState(true);
+  const [clearingPlayer, setClearingPlayer] = useState(false);
   const [selectedCameraId, setSelectedCameraId] = useState("");
   const [availableCameras, setAvailableCameras] = useState([]);
   const [jumpToMatchValue, setJumpToMatchValue] = useState("");
@@ -149,6 +143,10 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const scanCanvasRef = useRef(null);
   const scanStreamRef = useRef(null);
   const scanCaptureAbortRef = useRef(null);
+  // Cada arranque/parada de camara incrementa este id. Un getUserMedia que
+  // resuelve con un id viejo (cambio de camara o de vista mientras arrancaba)
+  // detiene sus tracks y no toca el video.
+  const scanCameraAttemptRef = useRef(0);
   const matchCardRefs = useRef(new Map());
 
   const updateScanSettings = useCallback((patch) => {
@@ -183,6 +181,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   }, [selectedCameraId]);
 
   const stopScanCamera = useCallback(() => {
+    scanCameraAttemptRef.current += 1;
     if (scanCaptureAbortRef.current) {
       scanCaptureAbortRef.current.abort();
       scanCaptureAbortRef.current = null;
@@ -208,6 +207,8 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     }
 
     stopScanCamera();
+    const attemptId = scanCameraAttemptRef.current;
+    const isStaleAttempt = () => attemptId !== scanCameraAttemptRef.current;
     setScanCameraStarting(true);
 
     try {
@@ -216,6 +217,9 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       }
 
       await refreshWebcams();
+      if (isStaleAttempt()) {
+        return;
+      }
       const constraints = {
         video: selectedCameraId
           ? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -223,11 +227,19 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         audio: false
       };
       const stream = await getUserMediaWithTimeout(constraints);
+      if (isStaleAttempt()) {
+        // Llego tarde: la camara ya no se usa, no dejar el stream abierto.
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       videoElement.srcObject = stream;
       scanStreamRef.current = stream;
       setScanCameraActive(true);
       setScanStatus({ type: "idle", message: "" });
     } catch (error) {
+      if (isStaleAttempt()) {
+        return;
+      }
       setScanCameraStarting(false);
       setScanCameraActive(false);
       setScanStatus({ type: "error", message: getCameraErrorMessage(error) });
@@ -325,10 +337,14 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         return;
       }
       if (result.status === "index_stale") {
+        // Para indice desalineado o ilegible Python ya manda el mensaje en
+        // espanol con la accion a seguir; el cambio de modelo viene en ingles.
         setScanStatus({
           type: "error",
           message:
-            "El catalogo se armo con una version anterior del reconocimiento. Anda a Fotos y presiona 'Actualizar fotos'."
+            result.reason !== "embedding_model_mismatch" && result.message
+              ? result.message
+              : "El indice esta desactualizado (se armo con otro modelo de reconocimiento). Volve a indexar desde Fotos."
         });
         return;
       }
@@ -454,6 +470,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     }
 
     setPrintingPhotos(true);
+    setScanStatus({ type: "idle", message: "Confirmá la impresión en el diálogo de Windows." });
     try {
       const result = await desktopApi.invoke("print:send", {
         photos: selectedMatches.map((match) => ({ photoPath: match.photoPath }))
@@ -503,6 +520,32 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     setSelectedMatchKeys([]);
   }, []);
 
+  // Pantalla del jugador en blanco y todo listo para el siguiente escaneo.
+  const handleNewPlayer = useCallback(async () => {
+    // Un escaneo en curso era del jugador anterior: se descarta.
+    if (scanCaptureAbortRef.current) {
+      scanCaptureAbortRef.current.abort();
+      scanCaptureAbortRef.current = null;
+      setScanInProgress(false);
+    }
+    clearMatches();
+    setJumpToMatchValue("");
+    setJumpToMatchFeedback({ type: "idle", message: "" });
+
+    setClearingPlayer(true);
+    try {
+      await desktopApi.invoke("player:set-preview-photos", { photos: [] });
+      setScanStatus({ type: "success", message: "Pantalla del jugador limpia. Listo para el siguiente escaneo." });
+    } catch (error) {
+      setScanStatus({
+        type: "error",
+        message: `No se pudo limpiar la pantalla del jugador: ${String(error.message || error)}`
+      });
+    } finally {
+      setClearingPlayer(false);
+    }
+  }, [clearMatches, desktopApi]);
+
   return {
     availableCameras,
     selectedCameraId,
@@ -517,6 +560,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     selectedMatches,
     sendingPreview,
     printingPhotos,
+    clearingPlayer,
     scanStatus,
     jumpToMatchValue,
     jumpToMatchFeedback,
@@ -533,6 +577,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     handleJumpToMatch,
     handleSendPreview,
     handlePrintSelected,
+    handleNewPlayer,
     handleSelectAllMatches,
     handleClearMatchSelection,
     toggleMatchSelection,

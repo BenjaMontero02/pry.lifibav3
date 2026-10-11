@@ -1,19 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EMPTY_INDEX_SUMMARY } from "../../../shared/photoStatus";
 
 const SOURCE_PHOTO_SAMPLE_LIMIT = 8;
 const SOURCEPAD_WATCH_STATUS_CHANNEL = "sourcepad:get-watch-status";
 const SOURCEPAD_RESCAN_CHANNEL = "sourcepad:rescan";
 
-const EMPTY_INDEX_SUMMARY = Object.freeze({
-  totalPhotos: 0,
-  trackedPhotos: 0,
-  indexedPhotos: 0,
-  photosWithoutFaces: 0,
-  unreadablePhotos: 0,
-  errorPhotos: 0,
-  pendingPhotos: 0,
-  byStatus: {}
-});
 
 const INITIAL_DIAGNOSTICS = Object.freeze({
   loading: false,

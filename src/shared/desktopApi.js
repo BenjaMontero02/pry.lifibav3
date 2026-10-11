@@ -1,13 +1,4 @@
-const EMPTY_INDEX_SUMMARY = Object.freeze({
-  totalPhotos: 0,
-  trackedPhotos: 0,
-  indexedPhotos: 0,
-  photosWithoutFaces: 0,
-  unreadablePhotos: 0,
-  errorPhotos: 0,
-  pendingPhotos: 0,
-  byStatus: {}
-});
+import { EMPTY_INDEX_SUMMARY } from "./photoStatus";
 
 const EMPTY_THUMBNAIL_PREWARM = Object.freeze({
   sourcePath: null,

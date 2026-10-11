@@ -1,37 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  EMPTY_INDEX_SUMMARY,
+  EMPTY_PHOTO_STATUS_COUNTS,
+  PHOTO_STATUS_FILTER_IDS
+} from "../../../shared/photoStatus";
 
 export const PHOTOS_PAGE_SIZE = 160;
 const SOURCEPAD_RELOAD_DEBOUNCE_MS = 350;
 const SOURCEPAD_WATCH_STATUS_CHANNEL = "sourcepad:get-watch-status";
-export const PHOTO_STATUS_FILTERS = Object.freeze([
-  "all",
-  "pending",
-  "indexed",
-  "no_faces",
-  "faces_filtered",
-  "error"
-]);
-
-export const EMPTY_PHOTO_STATUS_COUNTS = Object.freeze({
-  all: 0,
-  pending: 0,
-  indexed: 0,
-  no_faces: 0,
-  faces_filtered: 0,
-  error: 0
-});
-
-export const EMPTY_INDEX_SUMMARY = Object.freeze({
-  totalPhotos: 0,
-  trackedPhotos: 0,
-  indexedPhotos: 0,
-  photosWithoutFaces: 0,
-  unreadablePhotos: 0,
-  errorPhotos: 0,
-  pendingPhotos: 0,
-  statusCounts: EMPTY_PHOTO_STATUS_COUNTS,
-  errorSamples: []
-});
 
 export const EMPTY_THUMBNAIL_PREWARM = Object.freeze({
   sourcePath: null,
@@ -154,11 +130,11 @@ function normalizeSourcepadWatchStatus(value, fallback = EMPTY_SOURCEPAD_WATCH_S
 
 function normalizePhotoStatusFilter(value) {
   const statusFilter = String(value || "all").trim();
-  return PHOTO_STATUS_FILTERS.includes(statusFilter) ? statusFilter : "all";
+  return PHOTO_STATUS_FILTER_IDS.includes(statusFilter) ? statusFilter : "all";
 }
 
 function normalizePhotoStatusCounts(value) {
-  return PHOTO_STATUS_FILTERS.reduce((counts, statusFilter) => {
+  return PHOTO_STATUS_FILTER_IDS.reduce((counts, statusFilter) => {
     counts[statusFilter] = Number(value?.[statusFilter] || 0);
     return counts;
   }, {});
@@ -205,6 +181,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
   const [clearingIndex, setClearingIndex] = useState(false);
   const [sourcepadWatchStatus, setSourcepadWatchStatus] = useState(() => EMPTY_SOURCEPAD_WATCH_STATUS);
   const photosScrollRef = useRef(null);
+  const indexingRef = useRef(false);
   const photosRequestIdRef = useRef(0);
   const photosLoadRafRef = useRef(0);
   const photosLastAutoloadAtRef = useRef(0);
@@ -403,6 +380,11 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
   }, [photosStatusFilter]);
 
   const handleClearIndex = useCallback(async () => {
+    if (indexingRef.current) {
+      setPhotosError("No se puede limpiar el catalogo mientras se analizan fotos. Espera a que termine.");
+      return;
+    }
+
     const confirmed = window.confirm(
       "Esto borra los datos de reconocimiento facial y limpia la pantalla del jugador. Las fotos originales no se eliminan. Continuar?"
     );
@@ -460,6 +442,14 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
   }, [maybeLoadMorePhotos]);
 
   const handleIndexPhotos = useCallback(async ({ force = false } = {}) => {
+    // Un segundo indexado mientras corre el primero no debe pisar el progreso ni
+    // apagar el estado "Analizando" del primero.
+    if (indexingRef.current) {
+      setPhotosError("Ya hay un analisis en curso. Espera a que termine.");
+      return;
+    }
+
+    indexingRef.current = true;
     setIndexingPhotos(true);
     setIndexingMessage("");
     setIndexingProgress(null);
@@ -480,9 +470,15 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       }
       const retriedText = stats.retriedPhotos > 0 ? `, ${stats.retriedPhotos} reintentadas` : "";
       const rebuiltText = stats.indexRebuilt ? " Se reanalizo todo el catalogo." : "";
+      // Si AdaFace no cargo, Python cae a InsightFace: funciona pero con menos
+      // precision, y el operador tiene que enterarse.
+      const fallbackReason = response?.result?.embeddingBackendFallback;
+      const fallbackText = fallbackReason
+        ? ` Atencion: se uso el modelo de respaldo porque el principal no cargo (${fallbackReason}).`
+        : "";
       setIndexingMessage(
         `Analisis completo: ${stats.processedPhotos} fotos revisadas${retriedText}, ` +
-          `${stats.newFacesIndexed} rostros encontrados.${rebuiltText}`
+          `${stats.newFacesIndexed} rostros encontrados.${rebuiltText}${fallbackText}`
       );
       if (stats.indexRebuilt) {
         // Con el indice reconstruido, los resultados de un escaneo anterior ya
@@ -495,6 +491,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       setIndexingProgress(null);
       setPhotosError(`No se pudo completar el analisis: ${String(error.message || error)}`);
     } finally {
+      indexingRef.current = false;
       setIndexingPhotos(false);
     }
   }, [desktopApi, loadPhotos, onIndexRebuilt, photosStatusFilter]);

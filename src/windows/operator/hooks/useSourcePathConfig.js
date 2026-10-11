@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 export default function useSourcePathConfig(desktopApi) {
   const [sourcePath, setSourcePath] = useState("");
   const [persistedPath, setPersistedPath] = useState("");
+  // main devuelve `value` solo si la carpeta guardada sigue existiendo.
+  const [persistedPathValid, setPersistedPathValid] = useState(false);
   const [loading, setLoading] = useState(true);
   const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -20,6 +22,7 @@ export default function useSourcePathConfig(desktopApi) {
         const value = result?.value || result?.rawValue || "";
         setSourcePath(value);
         setPersistedPath(value);
+        setPersistedPathValid(Boolean(result?.value));
         if (!result?.value && result?.rawValue) {
           setStatus({
             type: "error",
@@ -97,6 +100,7 @@ export default function useSourcePathConfig(desktopApi) {
       });
       const value = result?.value || sourcePath;
       setPersistedPath(value);
+      setPersistedPathValid(true);
       setSourcePath(value);
       setStatus({ type: "success", message: "Carpeta sourcepad guardada en la base de datos." });
     } catch (error) {
@@ -112,6 +116,7 @@ export default function useSourcePathConfig(desktopApi) {
   return {
     sourcePath,
     persistedPath,
+    persistedPathValid,
     loading,
     picking,
     saving,

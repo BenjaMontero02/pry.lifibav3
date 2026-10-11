@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import PhotoErrorDetail from "./PhotoErrorDetail";
 import PhotoStatusBadge from "./PhotoStatusBadge";
 import FallbackImage from "../../../shared/FallbackImage";
 
-export default function PhotoRow({ photo, displayIndex, onOpen }) {
+// memo: el progreso del indexado re-renderiza PhotosView muchas veces por segundo;
+// las filas solo cambian si cambia su foto, su numero o el callback de abrir.
+function PhotoRow({ photo, displayIndex, onOpen }) {
   const [errorExpanded, setErrorExpanded] = useState(false);
   const canOpen = typeof onOpen === "function";
   const lastError = String(photo.lastError || "").trim();
@@ -50,3 +52,5 @@ export default function PhotoRow({ photo, displayIndex, onOpen }) {
     </article>
   );
 }
+
+export default memo(PhotoRow);

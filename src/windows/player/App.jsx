@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FallbackImage from "../../shared/FallbackImage";
 import { getDesktopApi } from "../../shared/desktopApi";
+import isEditableTarget from "../../shared/isEditableTarget";
+import { buildSourceThumbUrl } from "../../shared/sourceUrls";
 
 const EMPTY_PAYLOAD = Object.freeze({ photos: [], updatedAt: null });
 const INITIAL_VISIBLE_COUNT = 24;
@@ -42,19 +44,6 @@ function preloadPhotoUrl(url) {
   image.src = url;
 }
 
-function isEditableTarget(target) {
-  if (!target || typeof target !== "object") {
-    return false;
-  }
-  const tagName = target.tagName;
-  return (
-    target.isContentEditable ||
-    tagName === "INPUT" ||
-    tagName === "TEXTAREA" ||
-    tagName === "SELECT"
-  );
-}
-
 function exitDocumentFullscreen() {
   if (!document.fullscreenElement || !document.exitFullscreen) {
     return;
@@ -70,7 +59,8 @@ function toggleDocumentFullscreen() {
   document.documentElement.requestFullscreen?.().catch(() => undefined);
 }
 
-const HeroPhoto = memo(function HeroPhoto({ photo }) {
+// Foto completa: solo para la foto destacada. La grilla usa miniaturas.
+const HeroPhoto = memo(function HeroPhoto({ photo, total }) {
   if (!photo) {
     return null;
   }
@@ -80,7 +70,7 @@ const HeroPhoto = memo(function HeroPhoto({ photo }) {
         key={photo.url}
         className="player-hero-media"
         src={photo.url}
-        alt={`Foto ${photo.displayNumber}`}
+        alt={`Foto ${photo.displayNumber} de ${total}`}
         fallbackLabel="Sin imagen"
         loading="eager"
         fetchPriority="high"
@@ -88,16 +78,14 @@ const HeroPhoto = memo(function HeroPhoto({ photo }) {
         width="1200"
         height="900"
       />
-      <span className="player-reference player-reference-hero">#{photo.displayNumber}</span>
+      <span className="player-reference player-reference-hero">
+        Foto {photo.displayNumber} de {total}
+      </span>
     </article>
   );
 });
 
 const GalleryPhoto = memo(function GalleryPhoto({ photo, originalIndex, onSelect }) {
-  const handlePrimeImage = useCallback(() => {
-    preloadPhotoUrl(photo.url);
-  }, [photo.url]);
-
   const handleSelect = useCallback(() => {
     onSelect(originalIndex);
   }, [onSelect, originalIndex]);
@@ -107,21 +95,19 @@ const GalleryPhoto = memo(function GalleryPhoto({ photo, originalIndex, onSelect
       type="button"
       className="player-photo-card"
       onClick={handleSelect}
-      onFocus={handlePrimeImage}
-      onPointerEnter={handlePrimeImage}
-      aria-label={`Ver foto ${photo.displayNumber}`}
+      aria-label={`Ver foto ${photo.displayNumber} de ${photo.total}`}
     >
       <FallbackImage
         className="player-photo-image"
-        src={photo.url}
-        alt={`Foto ${photo.displayNumber}`}
+        src={photo.thumbUrl || photo.url}
+        fallbackSrc={photo.url}
+        alt={`Foto ${photo.displayNumber} de ${photo.total}`}
         fallbackLabel="Sin imagen"
         loading="lazy"
         decoding="async"
         width="480"
         height="600"
       />
-      <span className="player-reference">#{photo.displayNumber}</span>
     </button>
   );
 });
@@ -186,13 +172,14 @@ export default function App() {
     if (!Array.isArray(previewPayload?.photos)) {
       return [];
     }
-    return previewPayload.photos
-      .filter((photo) => photo && photo.url)
-      .map((photo, index) => ({
-        photoPath: photo.photoPath,
-        url: photo.url,
-        displayNumber: resolveDisplayNumber(photo, index)
-      }));
+    const validPhotos = previewPayload.photos.filter((photo) => photo && photo.url);
+    return validPhotos.map((photo, index) => ({
+      photoPath: photo.photoPath,
+      url: photo.url,
+      thumbUrl: photo.photoPath ? buildSourceThumbUrl(photo.photoPath) : "",
+      displayNumber: resolveDisplayNumber(photo, index),
+      total: validPhotos.length
+    }));
   }, [previewPayload]);
 
   photosLengthRef.current = photos.length;
@@ -301,11 +288,18 @@ export default function App() {
       <section className="player-stage">
         {photos.length === 0 ? (
           <section className="player-empty">
-            <p>Tus fotos van a aparecer aca.</p>
+            <span className="player-empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 8h3l2-2.5h6L17 8h3v11H4z" />
+                <circle cx="12" cy="13" r="3.2" />
+              </svg>
+            </span>
+            <p className="player-empty-title">Tus fotos van a aparecer acá</p>
+            <p className="player-empty-text">Cuando el operador elija tus fotos, se muestran en esta pantalla.</p>
           </section>
         ) : (
           <section className="player-gallery" aria-label="Tus fotos del evento">
-            <HeroPhoto photo={heroPhoto} />
+            <HeroPhoto photo={heroPhoto} total={photos.length} />
 
             {galleryPhotos.length > 0 ? (
               <section className="player-grid" aria-label="Galeria de fotos">
@@ -327,6 +321,10 @@ export default function App() {
                 </button>
               </div>
             ) : null}
+
+            <p className="player-keys" aria-hidden="true">
+              <kbd>←</kbd> <kbd>→</kbd> cambiar foto · <kbd>F</kbd> pantalla completa
+            </p>
           </section>
         )}
       </section>

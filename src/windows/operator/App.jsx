@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import useDiagnostics from "./hooks/useDiagnostics";
 import usePhotos from "./hooks/usePhotos";
@@ -23,6 +23,7 @@ const NAV_ITEMS = [
 export default function App() {
   const desktopApi = useMemo(() => getDesktopApi(), []);
   const [activeView, setActiveView] = useState("settings");
+  const initialViewResolvedRef = useRef(false);
 
   const sourceConfig = useSourcePathConfig(desktopApi);
   const indexSettings = useIndexSettings(desktopApi);
@@ -41,6 +42,20 @@ export default function App() {
     // Otra carpeta de fotos: los resultados del escaneo anterior son de otro catalogo.
     clearMatches();
   }, [clearMatches, sourceConfig.persistedPath]);
+
+  useEffect(() => {
+    // Arranque: con carpeta guardada se entra directo a Escanear. Solo se decide
+    // una vez, para no pisar la navegacion del operador.
+    if (initialViewResolvedRef.current || sourceConfig.loading) {
+      return;
+    }
+    initialViewResolvedRef.current = true;
+    // Con la carpeta guardada borrada o movida, el operador tiene que pasar por
+    // Ajustes antes de poder escanear.
+    if (sourceConfig.persistedPathValid) {
+      setActiveView("scan-player");
+    }
+  }, [sourceConfig.loading, sourceConfig.persistedPathValid]);
 
   return (
     <main className="operator-shell">
@@ -119,6 +134,7 @@ export default function App() {
               selectedMatches={scan.selectedMatches}
               sendingPreview={scan.sendingPreview}
               printingPhotos={scan.printingPhotos}
+              clearingPlayer={scan.clearingPlayer}
               scanStatus={scan.scanStatus}
               jumpToMatchValue={scan.jumpToMatchValue}
               jumpToMatchFeedback={scan.jumpToMatchFeedback}
@@ -135,6 +151,7 @@ export default function App() {
               onJumpToMatch={scan.handleJumpToMatch}
               onSendPreview={scan.handleSendPreview}
               onPrintSelected={scan.handlePrintSelected}
+              onNewPlayer={scan.handleNewPlayer}
               onSelectAllMatches={scan.handleSelectAllMatches}
               onClearMatchSelection={scan.handleClearMatchSelection}
               onToggleMatchSelection={scan.toggleMatchSelection}

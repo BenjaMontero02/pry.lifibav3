@@ -1407,18 +1407,68 @@ body {
 .player-empty {
   min-height: 65vh;
   margin: 0;
-  display: grid;
-  place-items: center;
+  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-align: center;
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius-control);
   color: var(--ink-soft);
-  font-size: clamp(1rem, 2.2vw, 1.1rem);
-  font-weight: 600;
   background: var(--bg);
 }
 
 .player-empty p {
   margin: 0;
+}
+
+.player-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  margin-bottom: 0.4rem;
+  border-radius: 999px;
+  color: var(--accent-deep);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.player-empty-title {
+  color: var(--ink);
+  font-size: clamp(1.1rem, 2.4vw, 1.35rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.player-empty-text {
+  max-width: 28rem;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.player-keys {
+  margin: 0.2rem 0 0;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.player-keys kbd {
+  display: inline-block;
+  min-width: 1.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: center;
 }
 
 .player-gallery {
@@ -1547,6 +1597,15 @@ body {
 .player-more:focus-visible {
   outline: 2px solid var(--accent-deep);
   outline-offset: 2px;
+}
+
+/* ── Atajos de teclado (pantalla Escanear) ───────── */
+
+.scan-shortcuts {
+  margin: 0.35rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 /* ── Settings Sliders ────────────────────────────── */
