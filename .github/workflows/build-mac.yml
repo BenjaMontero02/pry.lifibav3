@@ -15,51 +15,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Misma validacion que build-win.yml: el dmg se nombra con la version de
+      # package.json, asi que el tag tiene que coincidir.
+      - name: Validar que el tag coincida con package.json
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::El tag ${GITHUB_REF_NAME} no coincide con package.json (version ${PKG_VERSION}). Subi la version en package.json, commitea y volve a etiquetar como v${PKG_VERSION}."
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} == package.json ${PKG_VERSION}"
+
       # Node >= 22.13 lo exige pnpm 11 (usa node:sqlite). Con Node 20 el
       # binario de pnpm crashea al arrancar con ERR_UNKNOWN_BUILTIN_MODULE.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      # pnpm >= 10.6 es necesario para que se lea nodeLinker desde
-      # pnpm-workspace.yaml (ver comentarios en ese archivo).
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python/requirements.lock
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      # Mismo lock con hashes que Windows (compilado universal, sin --platform).
+      # --no-deps: ver comentario en build-win.yml. Este lock no se ha verificado
+      # en macOS todavia: la primera corrida de este workflow es la prueba.
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          if [ -f python/requirements.txt ]; then
-            pip install -r python/requirements.txt
-          fi
+        run: python -m pip install --require-hashes --no-deps -r python/requirements.lock
 
-      # Descarga y verifica todos los modelos declarados en scripts/models.json
-      # (antelopev2 + AdaFace ONNX) para que queden dentro del instalador. NO se
-      # captura el error: si un modelo falta o el sha256 no coincide, el build
-      # falla aca. Antes esto era un heredoc con try/except que imprimia un
-      # WARNING y seguia, y asi se publicaron instaladores sin modelos.
+      - name: Cache face models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.insightface/models/antelopev2
+            python/models/adaface_ir101_webface12m.onnx
+          key: face-models-${{ runner.os }}-${{ hashFiles('scripts/models.json') }}
+
+      # Descarga y verifica todos los modelos declarados en scripts/models.json.
+      # NO se captura el error: un modelo faltante o un sha256 distinto aborta.
       - name: Prepare face models
         run: node scripts/prepare-models.cjs
 
       - name: Build (python + renderer + dmg)
         run: pnpm run build
 
-      # Ejecuta el binario ya empaquetado y le pide self_check: construye el
-      # analizador facial adentro del bundle y exige que el detector haya
-      # cargado y que el backend de embeddings sea adaface. Falla el CI aqui si
-      # falta un modelo, en vez de entregar un instalador que no indexa.
+      # Ejecuta el binario ya empaquetado y le pide self_check (ver build-win.yml).
       - name: Smoke test packaged python-child
         run: pnpm run smoke:child
 

@@ -13,47 +13,70 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        # Git Bash: necesario para el `if [ -f ]` del step de pip.
+        # Git Bash: los steps de shell usan sintaxis POSIX.
         shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # El instalador se nombra con la version de package.json (electron-builder
+      # usa ${version}). Si el tag no coincide, el artefacto saldria con otra
+      # version que la del tag: se corta aca, antes de gastar el build.
+      - name: Validar que el tag coincida con package.json
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::El tag ${GITHUB_REF_NAME} no coincide con package.json (version ${PKG_VERSION}). Subi la version en package.json, commitea y volve a etiquetar como v${PKG_VERSION}."
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} == package.json ${PKG_VERSION}"
+
       # Node >= 22.13 lo exige pnpm 11 (usa node:sqlite). Con Node 20 el
       # binario de pnpm crashea al arrancar con ERR_UNKNOWN_BUILTIN_MODULE.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      # pnpm >= 10.6 es necesario para que se lea nodeLinker desde
-      # pnpm-workspace.yaml (ver comentarios en ese archivo).
+      # pnpm va antes de setup-node para que la cache de pnpm funcione.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python/requirements.lock
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      # Lock con hashes (compilado con uv, incluye pyinstaller). --no-deps porque
+      # el lock ya trae el cierre completo y insightface declara opencv-python
+      # (GUI), que el lock reemplaza por la variante headless.
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          if [ -f python/requirements.txt ]; then
-            pip install -r python/requirements.txt
-          fi
+        run: python -m pip install --require-hashes --no-deps -r python/requirements.lock
+
+      # Modelos faciales: se cachean por hash del manifiesto. Si scripts/models.json
+      # cambia, la key cambia y se vuelven a descargar.
+      - name: Cache face models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.insightface/models/antelopev2
+            python/models/adaface_ir101_webface12m.onnx
+          key: face-models-${{ runner.os }}-${{ hashFiles('scripts/models.json') }}
 
       # Descarga y verifica todos los modelos declarados en scripts/models.json
       # (antelopev2 + AdaFace ONNX) para que queden dentro del instalador. NO se
       # captura el error: si un modelo falta o el sha256 no coincide, el build
-      # falla aca. Antes esto era un heredoc con try/except que imprimia un
-      # WARNING y seguia, y asi se publicaron instaladores sin modelos.
+      # falla aca.
       - name: Prepare face models
         run: node scripts/prepare-models.cjs
 

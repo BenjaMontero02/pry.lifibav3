@@ -6,7 +6,10 @@
     "kind: 'zip-flatten' extrae aplanando (el zip de antelopev2 trae una carpeta",
     "interna que insightface no aplana, y ese es el bug que rompia los builds de CI).",
     "dest: '~/...' se expande al home del usuario; cualquier otra ruta es relativa",
-    "a la raiz del repo. sha256 se verifica siempre contra el archivo descargado."
+    "a la raiz del repo. sha256 se verifica siempre contra el archivo descargado.",
+    "expectedFiles es tambien lo que build.spec empaqueta: de antelopev2 solo van el",
+    "detector y glintr100 (fallback de reconocimiento). 1k3d68, 2d106det y genderage",
+    "no se cargan (ALLOWED_MODULES en face_index_service.py) y sumaban ~150 MB."
   ],
   "models": [
     {
@@ -18,9 +21,6 @@
       "dest": "~/.insightface/models/antelopev2",
       "bundleDir": "insightface_models/models/antelopev2",
       "expectedFiles": [
-        "1k3d68.onnx",
-        "2d106det.onnx",
-        "genderage.onnx",
         "glintr100.onnx",
         "scrfd_10g_bnkps.onnx"
       ]

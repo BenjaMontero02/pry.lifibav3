@@ -13,3 +13,7 @@ python/dist/
 python/build/
 dist/
 python/models/
+# Salida de PyInstaller (onedir, cientos de MB) copiada por scripts/build-python.cjs.
+# .gitkeep se conserva para que la carpeta exista en el repo.
+resources/python/*
+!resources/python/.gitkeep

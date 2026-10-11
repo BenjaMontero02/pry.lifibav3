@@ -273,6 +273,12 @@ async function main() {
   log("Todos los modelos estan listos para empaquetar.");
 }
 
-main().catch((error) => {
-  fail(String(error && error.stack ? error.stack : error));
-});
+// Exportado para los tests (scripts/prepare-models.test.mjs). Al ser require,
+// no dispara la descarga: solo corre el CLI cuando se ejecuta directamente.
+module.exports = { readZipEntries, extractFlattened, sha256OfFile };
+
+if (require.main === module) {
+  main().catch((error) => {
+    fail(String(error && error.stack ? error.stack : error));
+  });
+}

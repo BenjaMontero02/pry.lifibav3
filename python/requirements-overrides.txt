@@ -1,0 +1,5 @@
+# Usado solo al compilar el lock (uv pip compile --override). insightface 1.0.1
+# declara opencv-python (variante con GUI) como dependencia dura; con esta
+# linea el lock deja solo opencv-python-headless (ambas escriben el paquete cv2
+# y no deben convivir). Por eso el lock se instala con --no-deps.
+opencv-python ; sys_platform == "never"

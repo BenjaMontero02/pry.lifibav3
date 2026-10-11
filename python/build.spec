@@ -95,6 +95,30 @@ for model in MODELS:
         )
     )
 
+# Modulos que el codigo NO usa y que collect_all/scipy/skimage arrastrarian
+# (cientos de MB). Verificado con grep en python/ y en site-packages:
+#  - insightface.app.mask_renderer y insightface.thirdparty.face3d: solo los usa
+#    el renderer de mascaras; insightface/app/__init__.py lo importa dentro de
+#    try/except ImportError, asi que sin el modulo el import simplemente se omite.
+#  - matplotlib, mpl_toolkits, albumentations: solo los importan de forma
+#    perezosa (dentro de funciones) skimage/scipy y ese renderer.
+# Si algun modulo nuevo los necesita en runtime, el ImportError aparecera al
+# usarlo: agregarlo aca a EXCLUDED_MODULES solo despues de confirmarlo.
+EXCLUDED_MODULES = [
+    "torch",
+    "torchvision",
+    "matplotlib",
+    "mpl_toolkits",
+    "albumentations",
+    "insightface.app.mask_renderer",
+    "insightface.thirdparty.face3d",
+]
+
+# Onedir (no onefile): con onefile PyInstaller descomprime ~600 MB de modelos
+# en %TEMP% en cada arranque. En onedir el ejecutable queda en
+# dist/python-child/python-child.exe y los datos en dist/python-child/_internal/
+# (sys._MEIPASS apunta ahi con PyInstaller 6). scripts/build-python.cjs copia la
+# carpeta entera a resources/python/.
 a = Analysis(
     [os.path.join(SPECPATH, "main.py")],
     pathex=[],
@@ -104,20 +128,29 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["torch", "torchvision"],
+    excludes=EXCLUDED_MODULES,
     noarchive=False,
 )
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="python-child",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX deshabilitado: comprimir DLLs de onnxruntime dispara falsos positivos
+    # de antivirus y no esta instalado en CI.
+    upx=False,
     console=True,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="python-child",
 )

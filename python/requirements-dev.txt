@@ -1,0 +1,4 @@
+# Herramientas de test y lint (no van al instalador). CI las instala encima de
+# python/requirements.lock. Pins fijos para que el lint no cambie solo.
+pytest==9.1.1
+ruff==0.17.0

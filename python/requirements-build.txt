@@ -1,0 +1,6 @@
+# Input del lock de CI/build (python/requirements.lock). Compilar con:
+#   uv pip compile python/requirements-build.txt --override python/requirements-overrides.txt \
+#     --python-version 3.11 --universal --generate-hashes -o python/requirements.lock
+-r requirements.txt
+# PyInstaller 6+: en onedir sys._MEIPASS apunta a _internal/ (donde van los datas).
+pyinstaller==6.22.3

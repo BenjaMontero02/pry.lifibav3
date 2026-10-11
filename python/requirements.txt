@@ -1,9 +1,18 @@
-# Versiones fijas: un cambio de version del detector o de onnxruntime cambia
-# que caras se detectan, y el indice quedaria inconsistente entre instalaciones.
-# El codigo depende de la API de insightface 1.0.x (SCRFD.detect multi-escala).
+# Dependencias directas del backend. Versiones fijas: un cambio de version del
+# detector o de onnxruntime cambia que caras se detectan, y el indice quedaria
+# inconsistente entre instalaciones. El codigo depende de la API de insightface
+# 1.0.x (SCRFD.detect multi-escala).
+#
+# NO instalar con `pip install -r python/requirements.txt` a secas: insightface
+# declara opencv-python (GUI) y eso deja dos paquetes escribiendo cv2/. La forma
+# correcta de instalar el entorno (dev y CI) es el lock con hashes:
+#   python -m pip install --require-hashes --no-deps -r python/requirements.lock
+# El lock se compila desde requirements-build.txt + requirements-overrides.txt.
 insightface==1.0.1
 onnxruntime==1.27.0
 faiss-cpu==1.14.3
 numpy==2.4.6
 Pillow==12.3.0
-opencv-python==4.13.0.92
+# Headless: el codigo solo usa cv2.imdecode / cv2.imencode / cv2.cvtColor (sin
+# ventanas). El lock reemplaza la variante GUI que arrastra insightface.
+opencv-python-headless==4.13.0.92

@@ -1,0 +1,8 @@
+# Lint conservador de python/. Solo errores reales: E9 (errores de sintaxis y de
+# E/S) y F (pyflakes: imports sin uso, nombres indefinidos, etc.). No hay reglas
+# de estilo todavia: se agregan de a una cuando el codigo este limpio.
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E9", "F"]

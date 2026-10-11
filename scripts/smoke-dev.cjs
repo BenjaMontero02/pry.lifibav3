@@ -239,7 +239,7 @@ function checkPythonEnvironment() {
       "WARN",
       "Python .venv exists but did not answer",
       `${formatRelative(venvPython)} -> ${version.output}`,
-      "Recreate it with: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install -r python\\requirements.txt"
+      "Recreate it with: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install --require-hashes --no-deps -r python\\requirements.lock"
     );
     return;
   }
@@ -250,7 +250,7 @@ function checkPythonEnvironment() {
       "WARN",
       "Python .venv is missing",
       `The bridge will fall back to PATH python: ${fallback.output}`,
-      "For reproducible dev setup run: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install -r python\\requirements.txt"
+      "For reproducible dev setup run: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install --require-hashes --no-deps -r python\\requirements.lock"
     );
     return;
   }
@@ -259,7 +259,7 @@ function checkPythonEnvironment() {
     "FAIL",
     "Python .venv is missing and PATH python is unavailable",
     fallback.output,
-    "Install Python 3.11+ and run: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install -r python\\requirements.txt"
+    "Install Python 3.11+ and run: python -m venv .venv ; .\\.venv\\Scripts\\python.exe -m pip install --require-hashes --no-deps -r python\\requirements.lock"
   );
 }
 
