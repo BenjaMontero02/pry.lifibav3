@@ -113,7 +113,9 @@ child.stdout.on("data", (chunk) => {
       return;
     }
 
-    if (response.requestId !== "smoke-1") {
+    // Eventos del protocolo ("started", "progress") traen el mismo requestId
+    // pero no son la respuesta.
+    if (response.type || response.requestId !== "smoke-1") {
       continue;
     }
 

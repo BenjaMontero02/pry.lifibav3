@@ -1093,6 +1093,38 @@ body {
   font: 600 0.9rem var(--font-sans);
 }
 
+.scan-tuning {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.4rem 1.5rem;
+  align-items: center;
+  margin-top: 0.9rem;
+}
+
+.scan-tuning-threshold .slider-labels {
+  margin-bottom: 0;
+}
+
+.scan-tuning-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.scan-tuning-toggle input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .scan-tuning {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .scan-select:focus-visible,
 .scan-threshold:focus-visible {
   border-color: var(--accent);

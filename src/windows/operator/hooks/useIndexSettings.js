@@ -38,7 +38,11 @@ export default function useIndexSettings(desktopApi) {
 
     try {
       await desktopApi.invoke("config:set-index-settings", { faceSizePx, faceDetScore });
-      setStatus({ type: "success", message: "Ajustes de indexado guardados." });
+      setStatus({
+        type: "success",
+        message:
+          "Ajustes guardados. Se aplican en el proximo 'Actualizar fotos', que va a reanalizar todo el catalogo."
+      });
     } catch (error) {
       setStatus({
         type: "error",

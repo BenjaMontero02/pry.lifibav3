@@ -64,6 +64,9 @@ const THUMBNAIL_PREWARM_RESCAN_LIMIT = 240;
 const THUMBNAIL_PREWARM_PROGRESS_INTERVAL_MS = 600;
 const SQLITE_BIND_CHUNK_SIZE = 900;
 const PHOTO_STATUS_FILTERS = new Set(["all", "pending", "indexed", "no_faces", "faces_filtered", "error"]);
+// Tiene que coincidir con IMAGE_EXTENSIONS de python/app/services/file_service.py:
+// una extension que se lista aca pero Python no indexa queda "pendiente" para
+// siempre. HEIC/HEIF no estan porque el backend no los puede decodificar.
 const SOURCE_IMAGE_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
@@ -72,10 +75,16 @@ const SOURCE_IMAGE_EXTENSIONS = new Set([
   ".bmp",
   ".webp",
   ".tif",
-  ".tiff",
-  ".heic",
-  ".heif"
+  ".tiff"
 ]);
+
+function isSourceImageName(fileName) {
+  // "._foto.jpg" son metadatos de macOS (AppleDouble); Python tampoco los indexa.
+  if (String(fileName || "").startsWith("._")) {
+    return false;
+  }
+  return SOURCE_IMAGE_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
 
 function normalizeComparablePath(value) {
   return path.resolve(value || "").toLowerCase();
@@ -1282,8 +1291,7 @@ async function readImageFilesFromSourcePath(sourcePath) {
         continue;
       }
 
-      const extension = path.extname(entry.name).toLowerCase();
-      if (!SOURCE_IMAGE_EXTENSIONS.has(extension)) {
+      if (!isSourceImageName(entry.name)) {
         continue;
       }
 
@@ -1572,9 +1580,12 @@ function registerIpc() {
   ipcMain.handle("player:set-preview-photos", async (_event, payload) => {
     const photos = sanitizePlayerPreviewPhotos(payload?.photos);
 
+    // La pantalla del jugador descarta payloads con updatedAt <= al ultimo que
+    // aplico: si el reloj del sistema retrocede, Date.now() solo no alcanza.
+    const previousUpdatedAt = Number(playerPreviewPayload?.updatedAt) || 0;
     playerPreviewPayload = {
       photos,
-      updatedAt: Date.now()
+      updatedAt: Math.max(Date.now(), previousUpdatedAt + 1)
     };
     persistPlayerPreviewPayload(playerPreviewPayload);
 
@@ -1639,17 +1650,26 @@ function registerIpc() {
       }
     };
 
-    const response = await pythonBridge.sendToPython(action, mergedData);
-    if (action === "index_photos" && response?.ok) {
-      const manifestPath = response?.result?.manifestPath;
-      if (!manifestPath) {
-        throw new Error("Python index_photos response did not include manifestPath.");
-      }
-      syncPhotoIndexStatusFromManifest(sourcePath, manifestPath);
-      clearPhotoListCache(sourcePath);
+    if (action !== "index_photos") {
+      return pythonBridge.sendToPython(action, mergedData);
     }
 
-    return response;
+    try {
+      return await pythonBridge.sendToPython(action, mergedData);
+    } finally {
+      // Sincronizar tambien si la corrida fallo o dio timeout: Python guarda
+      // checkpoints del manifest durante la corrida, y sin esto la lista de
+      // fotos seguia mostrando el estado anterior.
+      const manifestPath = path.join(getFaceIndexDir(), "photos_manifest.json");
+      try {
+        if (fs.existsSync(manifestPath)) {
+          syncPhotoIndexStatusFromManifest(sourcePath, manifestPath);
+        }
+      } catch (syncError) {
+        console.error("[main] Could not sync photo index status from manifest:", syncError);
+      }
+      clearPhotoListCache(sourcePath);
+    }
   });
 }
 

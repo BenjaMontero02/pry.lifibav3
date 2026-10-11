@@ -14,6 +14,7 @@ ADAFACE_MODEL_FILENAME = "adaface_ir101_webface12m.onnx"
 
 _session = None
 _session_failed = False
+_session_error = None
 
 
 def _resolve_model_path():
@@ -29,7 +30,7 @@ def is_available():
 
 
 def _get_session():
-    global _session, _session_failed
+    global _session, _session_failed, _session_error
     if _session is not None or _session_failed:
         return _session
 
@@ -45,6 +46,7 @@ def _get_session():
             )
     except Exception as error:
         _session_failed = True
+        _session_error = f"{type(error).__name__}: {error}"
         sys.stderr.write(f"AdaFace session failed to load ({model_path}): {error}\n")
     return _session
 
@@ -52,22 +54,34 @@ def _get_session():
 def compute_embedding(image_bgr, face):
     """Devuelve el embedding AdaFace L2-normalizado para una cara detectada.
 
-    ``face`` es un objeto de insightface con ``kps`` (5 landmarks). Devuelve
-    None si no hay landmarks, la sesion no cargo o el embedding es invalido.
+    ``face`` es un objeto de insightface con ``kps`` (5 landmarks). Se promedia
+    el embedding del crop con el de su espejo horizontal (flip TTA): mas estable
+    con caras de perfil o borrosas. Ambos crops van en un solo batch.
+
+    Devuelve None si la cara no trae landmarks o el embedding es invalido.
+    Si la sesion ONNX no cargo LANZA: devolver None hacia que la foto quedara
+    marcada como "sin caras" y nunca se reintentara.
     """
     from app.services.face_index_service import normalize_embedding
 
-    session = _get_session()
     landmarks = getattr(face, "kps", None)
-    if session is None or landmarks is None:
+    if landmarks is None:
         return None
 
+    session = _get_session()
+    if session is None:
+        raise RuntimeError(
+            "No se pudo cargar el modelo AdaFace ({path}): {error}".format(
+                path=_resolve_model_path(), error=_session_error or "error desconocido"
+            )
+        )
+
     aligned = face_align.norm_crop(image_bgr, landmark=landmarks, image_size=112)
-    blob = (aligned.astype(np.float32) / 255.0 - 0.5) / 0.5
-    blob = np.transpose(blob, (2, 0, 1))[np.newaxis, ...]
+    crops = np.stack([aligned, aligned[:, ::-1, :]]).astype(np.float32)
+    blob = np.ascontiguousarray(np.transpose((crops / 255.0 - 0.5) / 0.5, (0, 3, 1, 2)))
 
     outputs = session.run(None, {"input": blob})
-    return normalize_embedding(outputs[0][0])
+    return normalize_embedding(outputs[0][0] + outputs[0][1])
 
 
 def session_ok():

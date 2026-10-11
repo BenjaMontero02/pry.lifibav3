@@ -4,7 +4,12 @@ const path = require("path");
 const { app } = require("electron");
 
 const MAX_STDERR_CHARS = 4000;
+const MAX_LOGGED_LINE_CHARS = 300;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+// Python atiende los pedidos de a uno. Mientras un pedido espera en la cola
+// (p. ej. un escaneo detras de un indexado) corre este timeout, mas largo; el
+// propio del pedido arranca cuando Python avisa "started".
+const QUEUED_REQUEST_TIMEOUT_MS = 30 * 60_000;
 const REQUEST_TIMEOUT_MS_BY_ACTION = {
   ping: 30_000,
   find_player: 60_000,
@@ -97,16 +102,29 @@ function createPythonBridge() {
 
   const armPendingTimer = (requestId, pendingRequest) => {
     clearPendingTimer(pendingRequest);
+    const timeoutMs = pendingRequest.started ? pendingRequest.timeoutMs : QUEUED_REQUEST_TIMEOUT_MS;
     pendingRequest.timer = setTimeout(() => {
       pending.delete(requestId);
       pendingRequest.reject(
         new Error(
-          `Python request timed out after ${pendingRequest.timeoutMs}ms without a response or progress ` +
-          `(action: ${pendingRequest.action}, requestId: ${requestId}). ` +
-          "The Python process may be hung or overloaded."
+          pendingRequest.started
+            ? `Python request timed out after ${timeoutMs}ms without a response or progress ` +
+              `(action: ${pendingRequest.action}, requestId: ${requestId}). ` +
+              "The Python process may be hung or overloaded."
+            : `Python request waited ${timeoutMs}ms in queue without starting ` +
+              `(action: ${pendingRequest.action}, requestId: ${requestId}). ` +
+              "Another request is still running."
         )
       );
-    }, pendingRequest.timeoutMs);
+    }, timeoutMs);
+  };
+
+  const rejectAllPending = (error) => {
+    pending.forEach((pendingRequest) => {
+      clearPendingTimer(pendingRequest);
+      pendingRequest.reject(error);
+    });
+    pending.clear();
   };
 
   const flushLine = (line) => {
@@ -118,6 +136,18 @@ function createPythonBridge() {
     try {
       parsed = JSON.parse(line);
     } catch (error) {
+      // Una linea que no es JSON es salida de alguna libreria que se escapo del
+      // redirect a stderr: no rompe el protocolo, pero hay que poder verla.
+      console.warn(`[python-bridge] Discarded non-JSON stdout line: ${line.slice(0, MAX_LOGGED_LINE_CHARS)}`);
+      return;
+    }
+
+    if (parsed.type === "started") {
+      const startedRequest = parsed.requestId ? pending.get(parsed.requestId) : null;
+      if (startedRequest) {
+        startedRequest.started = true;
+        armPendingTimer(parsed.requestId, startedRequest);
+      }
       return;
     }
 
@@ -171,39 +201,66 @@ function createPythonBridge() {
     const python = resolvePythonCommand();
     lastResolvedCommand = python;
     stderrBuffer = "";
+    // Un fragmento de linea del proceso anterior se pegaria a la primera
+    // respuesta del nuevo y la haria imposible de parsear.
+    stdoutBuffer = "";
     lastProcessError = null;
     lastProcessExit = null;
 
-    pythonProcess = spawn(python.command, python.args, {
-      stdio: ["pipe", "pipe", "pipe"]
+    const child = spawn(python.command, python.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }
     });
+    pythonProcess = child;
 
-    pythonProcess.stdout.setEncoding("utf8");
-    pythonProcess.stdout.on("data", (chunk) => {
+    // Cada handler ignora eventos de un proceso que ya fue reemplazado: el
+    // 'close' tardio del proceso viejo no puede rechazar pedidos del nuevo.
+    const isCurrent = () => pythonProcess === child;
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (!isCurrent()) {
+        return;
+      }
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || "";
       lines.forEach(flushLine);
     });
 
-    pythonProcess.stderr.setEncoding("utf8");
-    pythonProcess.stderr.on("data", (chunk) => {
-      appendStderr(String(chunk || ""));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      if (isCurrent()) {
+        appendStderr(String(chunk || ""));
+      }
     });
 
-    pythonProcess.on("error", (error) => {
-      lastProcessError = String(error && error.message ? error.message : error);
-    });
-
-    pythonProcess.on("exit", (code, signal) => {
-      lastProcessExit = { code, signal };
-      pending.forEach((pendingRequest) => {
-        clearPendingTimer(pendingRequest);
-        pendingRequest.reject(new Error(buildNotRunningMessage()));
-      });
-      pending.clear();
+    const handleProcessGone = () => {
+      if (!isCurrent()) {
+        return;
+      }
       pythonProcess = null;
+      rejectAllPending(new Error(buildNotRunningMessage()));
+    };
+
+    // 'error' sin 'exit' (p. ej. el ejecutable no existe) dejaba pythonProcess
+    // apuntando a un proceso muerto y nunca se reintentaba arrancarlo.
+    child.on("error", (error) => {
+      if (isCurrent()) {
+        lastProcessError = String(error && error.message ? error.message : error);
+      }
+      handleProcessGone();
     });
+
+    child.on("exit", (code, signal) => {
+      if (isCurrent()) {
+        lastProcessExit = { code, signal };
+      }
+    });
+
+    // 'close' llega despues de que stdout se vacio: una respuesta escrita justo
+    // antes de terminar ya fue procesada. En 'exit' todavia podia estar en el pipe.
+    child.on("close", handleProcessGone);
   };
 
   const stop = () => {
@@ -230,6 +287,7 @@ function createPythonBridge() {
         reject,
         action,
         timeoutMs: resolveRequestTimeoutMs(action),
+        started: false,
         timer: null
       };
       pending.set(requestId, pendingRequest);

@@ -158,11 +158,15 @@ function IndexPanel({
   });
   const hint = getIndexPanelHint({ hasSource, total });
 
+  // Siempre habilitado: ademas de las pendientes, "Actualizar" reintenta las
+  // fotos con error y aplica los ajustes de indexado que hayan cambiado.
   const indexLabel = indexingPhotos
     ? "Analizando fotos..."
     : pending > 0
       ? `Indexar ${formatCount(pending)} pendientes`
-      : "Todo indexado";
+      : errors > 0
+        ? "Reintentar fotos con error"
+        : "Actualizar fotos";
 
   return (
     <section className="index-panel" aria-label="Catalogo de rostros">
@@ -209,7 +213,7 @@ function IndexPanel({
           type="button"
           className="btn btn-primary"
           onClick={() => onIndexPhotos()}
-          disabled={actionsDisabled || pending === 0}
+          disabled={actionsDisabled || total === 0}
         >
           {indexLabel}
         </button>

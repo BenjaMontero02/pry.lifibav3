@@ -188,7 +188,7 @@ function getPhotosRequestOptions(eventOrOptions, maybeOptions) {
   return eventOrOptions || {};
 }
 
-export default function usePhotos({ desktopApi, activeView, persistedPath, onIndexCleared }) {
+export default function usePhotos({ desktopApi, activeView, persistedPath, onIndexCleared, onIndexRebuilt }) {
   const [photos, setPhotos] = useState([]);
   const [photosMeta, setPhotosMeta] = useState(() => createPhotosMeta());
   const [photosSearchDraft, setPhotosSearchDraft] = useState("");
@@ -478,9 +478,17 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
           }`
         );
       }
+      const retriedText = stats.retriedPhotos > 0 ? `, ${stats.retriedPhotos} reintentadas` : "";
+      const rebuiltText = stats.indexRebuilt ? " Se reanalizo todo el catalogo." : "";
       setIndexingMessage(
-        `Analisis completo: ${stats.processedPhotos} fotos revisadas, ${stats.newFacesIndexed} rostros encontrados.`
+        `Analisis completo: ${stats.processedPhotos} fotos revisadas${retriedText}, ` +
+          `${stats.newFacesIndexed} rostros encontrados.${rebuiltText}`
       );
+      if (stats.indexRebuilt) {
+        // Con el indice reconstruido, los resultados de un escaneo anterior ya
+        // no corresponden al catalogo actual.
+        onIndexRebuilt?.();
+      }
       await loadPhotos({ refresh: true, statusFilter: photosStatusFilter });
     } catch (error) {
       setIndexingMessage("");
@@ -489,7 +497,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
     } finally {
       setIndexingPhotos(false);
     }
-  }, [desktopApi, loadPhotos, photosStatusFilter]);
+  }, [desktopApi, loadPhotos, onIndexRebuilt, photosStatusFilter]);
 
   const handleReindexAll = useCallback(async () => {
     const confirmed = window.confirm(

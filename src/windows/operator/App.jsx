@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Sidebar from "./components/Sidebar";
 import useDiagnostics from "./hooks/useDiagnostics";
 import usePhotos from "./hooks/usePhotos";
@@ -32,8 +32,15 @@ export default function App() {
     desktopApi,
     activeView,
     persistedPath: sourceConfig.persistedPath,
-    onIndexCleared: scan.clearMatches
+    onIndexCleared: scan.clearMatches,
+    onIndexRebuilt: scan.clearMatches
   });
+
+  const { clearMatches } = scan;
+  useEffect(() => {
+    // Otra carpeta de fotos: los resultados del escaneo anterior son de otro catalogo.
+    clearMatches();
+  }, [clearMatches, sourceConfig.persistedPath]);
 
   return (
     <main className="operator-shell">
@@ -101,6 +108,8 @@ export default function App() {
               availableCameras={scan.availableCameras}
               selectedCameraId={scan.selectedCameraId}
               scanThreshold={scan.scanThreshold}
+              scanQueryExpansion={scan.scanQueryExpansion}
+              indexingPhotos={photos.indexingPhotos}
               scanCameraStarting={scan.scanCameraStarting}
               scanCameraActive={scan.scanCameraActive}
               scanVideoReady={scan.scanVideoReady}
@@ -118,6 +127,7 @@ export default function App() {
               matchCardRefs={scan.matchCardRefs}
               onSelectedCameraIdChange={scan.setSelectedCameraId}
               onScanThresholdChange={scan.setScanThreshold}
+              onScanQueryExpansionChange={scan.setScanQueryExpansion}
               onToggleCamera={scan.handleToggleScanCamera}
               onCaptureAndSearch={scan.handleCaptureAndSearch}
               onVideoLoadedMetadata={scan.handleScanVideoLoadedMetadata}

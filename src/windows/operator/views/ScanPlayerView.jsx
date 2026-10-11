@@ -4,6 +4,8 @@ export default function ScanPlayerView({
   availableCameras,
   selectedCameraId,
   scanThreshold,
+  scanQueryExpansion,
+  indexingPhotos,
   scanCameraStarting,
   scanCameraActive,
   scanVideoReady,
@@ -21,6 +23,7 @@ export default function ScanPlayerView({
   matchCardRefs,
   onSelectedCameraIdChange,
   onScanThresholdChange,
+  onScanQueryExpansionChange,
   onToggleCamera,
   onCaptureAndSearch,
   onVideoLoadedMetadata,
@@ -68,10 +71,49 @@ export default function ScanPlayerView({
           type="button"
           className="btn btn-primary"
           onClick={onCaptureAndSearch}
-          disabled={!scanCameraActive || !scanVideoReady || scanInProgress}
+          disabled={!scanCameraActive || !scanVideoReady || scanInProgress || indexingPhotos}
         >
           {scanInProgress ? "Buscando..." : "Capturar y buscar"}
         </button>
+      </div>
+
+      {indexingPhotos ? (
+        <p className="status" role="status">
+          Se estan analizando fotos. La busqueda se habilita cuando termine el analisis.
+        </p>
+      ) : null}
+
+      <div className="scan-tuning">
+        <div className="scan-tuning-threshold">
+          <label className="field-label" htmlFor="scan-threshold-slider">
+            Umbral de coincidencia ({scanThreshold.toFixed(2)})
+          </label>
+          <input
+            id="scan-threshold-slider"
+            className="settings-slider"
+            type="range"
+            min="0.2"
+            max="0.8"
+            step="0.01"
+            value={scanThreshold}
+            onChange={(event) => onScanThresholdChange(Number(event.target.value))}
+          />
+          <div className="slider-labels">
+            <span>0.20 (trae mas fotos, mas errores)</span>
+            <span>0.80 (solo muy parecidas)</span>
+          </div>
+        </div>
+        <label className="scan-tuning-toggle">
+          <input
+            type="checkbox"
+            checked={scanQueryExpansion}
+            onChange={(event) => onScanQueryExpansionChange(event.target.checked)}
+          />
+          <span>
+            Busqueda ampliada (experimental): usa las fotos mas seguras para encontrar otras de perfil o
+            borrosas. Puede traer fotos de otra persona parecida.
+          </span>
+        </label>
       </div>
 
       <div className="scan-layout">
@@ -204,7 +246,7 @@ export default function ScanPlayerView({
                   aria-label={`Foto ${match.displayNumber}${selectedMatchKeys.includes(match.key) ? ", seleccionada" : ""}`}
                 >
                   <FallbackImage
-                    src={match.url}
+                    src={match.thumbUrl}
                     alt={`Foto ${match.displayNumber}`}
                     className="scan-match-image"
                     fallbackLabel="Sin foto"

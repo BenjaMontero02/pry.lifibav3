@@ -2,7 +2,9 @@ import json
 import os
 from pathlib import Path
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".tif"}
+# Tiene que coincidir con SOURCE_IMAGE_EXTENSIONS de electron/main.js: una
+# extension que la UI lista pero Python no indexa queda "pendiente" para siempre.
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
 
 
 def load_json_file(path, default_value):
@@ -21,11 +23,7 @@ def load_json_file_with_status(path, default_value):
 
 
 def save_json_file(path, payload):
-    serialized = _serialize_json_payload(payload)
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write(serialized)
-    os.replace(temp_path, path)
+    _write_text_atomic(path, _serialize_json_payload(payload))
 
 
 def save_json_file_if_changed(path, payload):
@@ -43,11 +41,23 @@ def save_json_file_if_changed(path, payload):
     except FileNotFoundError:
         pass
 
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write(serialized)
-    os.replace(temp_path, path)
+    _write_text_atomic(path, serialized)
     return True
+
+
+def write_bytes_atomic(path, data):
+    """Escribe a un temporal propio y lo mueve encima: un corte a mitad de la
+    escritura deja el archivo anterior intacto, nunca uno truncado."""
+    temp_path = f"{path}.{os.getpid()}.tmp"
+    with open(temp_path, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+
+def _write_text_atomic(path, text):
+    write_bytes_atomic(path, text.encode("utf-8"))
 
 
 def _serialize_json_payload(payload):
@@ -60,7 +70,11 @@ def file_signature(file_path):
 
 
 def is_image_file(file_path):
-    return Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
+    path = Path(file_path)
+    # "._foto.jpg" son metadatos de macOS (AppleDouble), no imagenes.
+    if path.name.startswith("._"):
+        return False
+    return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
 def list_event_photos(source_dir):

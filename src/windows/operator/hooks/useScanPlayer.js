@@ -1,11 +1,49 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+// Mismo default que python/app/actions/find_player.py. Sin calibrar con fotos
+// reales del evento: el operador lo ajusta desde la pantalla Escanear.
 const DEFAULT_SIMILARITY_THRESHOLD = 0.45;
+const MIN_SIMILARITY_THRESHOLD = 0.2;
+const MAX_SIMILARITY_THRESHOLD = 0.8;
+// Tope de resultados por escaneo. Antes eran 12: un jugador con mas fotos veia
+// un corte distinto en cada escaneo y sin aviso de que habia mas.
+const SCAN_MAX_RESULTS = 200;
+const SCAN_SETTINGS_STORAGE_KEY = "lifiba.scanSettings.v1";
 const SCAN_CAPTURE_MAX_DIMENSION = 720;
 const SCAN_CAPTURE_JPEG_QUALITY = 0.82;
 const SCAN_CAMERA_START_TIMEOUT_MS = 8_000;
-const SCAN_CAPTURE_FRAME_COUNT = 4;
-const SCAN_CAPTURE_FRAME_INTERVAL_MS = 250;
+// Frames repartidos en ~1.2 s: con 4 frames en 750 ms eran casi identicos y
+// promediarlos no reducia la variacion entre un escaneo y el siguiente.
+const SCAN_CAPTURE_FRAME_COUNT = 7;
+const SCAN_CAPTURE_FRAME_INTERVAL_MS = 200;
+
+function clampThreshold(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_SIMILARITY_THRESHOLD;
+  }
+  return Math.min(MAX_SIMILARITY_THRESHOLD, Math.max(MIN_SIMILARITY_THRESHOLD, numeric));
+}
+
+function loadScanSettings() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SCAN_SETTINGS_STORAGE_KEY) || "null");
+    return {
+      threshold: clampThreshold(parsed?.threshold ?? DEFAULT_SIMILARITY_THRESHOLD),
+      queryExpansion: parsed?.queryExpansion === true
+    };
+  } catch {
+    return { threshold: DEFAULT_SIMILARITY_THRESHOLD, queryExpansion: false };
+  }
+}
+
+function saveScanSettings(settings) {
+  try {
+    window.localStorage.setItem(SCAN_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Sin storage disponible el ajuste dura solo esta sesion.
+  }
+}
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -35,6 +73,10 @@ function getCameraErrorMessage(error) {
 
 function buildSourcePhotoUrl(filePath) {
   return `sourcephoto://${encodeURIComponent(filePath)}`;
+}
+
+function buildSourceThumbUrl(filePath) {
+  return `sourcethumb://${encodeURIComponent(filePath)}`;
 }
 
 function captureVideoFrame(videoElement, canvasElement) {
@@ -91,7 +133,9 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const [selectedMatchKeys, setSelectedMatchKeys] = useState([]);
   const [sendingPreview, setSendingPreview] = useState(false);
   const [printingPhotos, setPrintingPhotos] = useState(false);
-  const [scanThreshold, setScanThreshold] = useState(DEFAULT_SIMILARITY_THRESHOLD);
+  const [scanSettings, setScanSettings] = useState(loadScanSettings);
+  const scanThreshold = scanSettings.threshold;
+  const scanQueryExpansion = scanSettings.queryExpansion;
   const [scanVideoReady, setScanVideoReady] = useState(false);
   const [scanCameraActive, setScanCameraActive] = useState(false);
   const [scanCameraStarting, setScanCameraStarting] = useState(false);
@@ -106,6 +150,24 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const scanStreamRef = useRef(null);
   const scanCaptureAbortRef = useRef(null);
   const matchCardRefs = useRef(new Map());
+
+  const updateScanSettings = useCallback((patch) => {
+    setScanSettings((current) => {
+      const next = { ...current, ...patch, threshold: clampThreshold(patch.threshold ?? current.threshold) };
+      saveScanSettings(next);
+      return next;
+    });
+  }, []);
+
+  const setScanThreshold = useCallback(
+    (value) => updateScanSettings({ threshold: value }),
+    [updateScanSettings]
+  );
+
+  const setScanQueryExpansion = useCallback(
+    (enabled) => updateScanSettings({ queryExpansion: Boolean(enabled) }),
+    [updateScanSettings]
+  );
 
   const refreshWebcams = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) {
@@ -230,12 +292,11 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         return;
       }
 
-      const safeThreshold = Number.isFinite(scanThreshold) ? scanThreshold : DEFAULT_SIMILARITY_THRESHOLD;
-
       const response = await desktopApi.sendToPython("find_player", {
         frames,
-        similarityThreshold: safeThreshold,
-        maxResults: 12
+        similarityThreshold: clampThreshold(scanThreshold),
+        maxResults: SCAN_MAX_RESULTS,
+        queryExpansion: scanQueryExpansion
       });
       if (abortController.signal.aborted) {
         return;
@@ -245,6 +306,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       const matches = (result.matches || []).map((match, index) => ({
         ...match,
         url: buildSourcePhotoUrl(match.photoPath),
+        thumbUrl: buildSourceThumbUrl(match.photoPath),
         key: `${match.photoPath}-${match.faceOrdinal}`,
         displayNumber: index + 1
       }));
@@ -256,10 +318,18 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         return;
       }
       if (result.status === "no_matches_above_threshold") {
-      setScanStatus({
-        type: "error",
-        message: "No se encontraron fotos con suficiente similitud. Proba ajustando la precision en Ajustes."
-      });
+        setScanStatus({
+          type: "error",
+          message: "No se encontraron fotos con suficiente similitud. Proba bajando el umbral de coincidencia."
+        });
+        return;
+      }
+      if (result.status === "index_stale") {
+        setScanStatus({
+          type: "error",
+          message:
+            "El catalogo se armo con una version anterior del reconocimiento. Anda a Fotos y presiona 'Actualizar fotos'."
+        });
         return;
       }
       if (result.status === "empty_index") {
@@ -270,9 +340,16 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         return;
       }
 
+      const moreText = result.hasMore
+        ? ` Se muestran las ${matches.length} mas parecidas; puede haber mas (subi el umbral para afinar).`
+        : "";
+      const rejectedText =
+        result.framesRejected > 0
+          ? ` Se descartaron ${result.framesRejected} capturas que no coincidian con el resto.`
+          : "";
       setScanStatus({
         type: "success",
-        message: `Se encontraron ${matches.length} fotos.`
+        message: `Se encontraron ${matches.length} fotos.${moreText}${rejectedText}`
       });
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -285,12 +362,16 @@ export default function useScanPlayer({ desktopApi, activeView }) {
         message: `No se pudo escanear el jugador: ${String(error.message || error)}`
       });
     } finally {
+      // Un escaneo abortado por uno nuevo no apaga el "Buscando..." del nuevo.
+      // Si lo aborto stopScanCamera (ref en null) si hay que apagarlo.
       if (scanCaptureAbortRef.current === abortController) {
         scanCaptureAbortRef.current = null;
+        setScanInProgress(false);
+      } else if (scanCaptureAbortRef.current === null) {
+        setScanInProgress(false);
       }
-      setScanInProgress(false);
     }
-  }, [desktopApi, scanCameraActive, scanThreshold, scanVideoReady]);
+  }, [desktopApi, scanCameraActive, scanQueryExpansion, scanThreshold, scanVideoReady]);
 
   const toggleMatchSelection = useCallback((matchKey) => {
     setSelectedMatchKeys((current) =>
@@ -426,6 +507,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     availableCameras,
     selectedCameraId,
     scanThreshold,
+    scanQueryExpansion,
     scanCameraStarting,
     scanCameraActive,
     scanVideoReady,
@@ -443,6 +525,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     matchCardRefs,
     setSelectedCameraId,
     setScanThreshold,
+    setScanQueryExpansion,
     setJumpToMatchValue,
     handleToggleScanCamera,
     handleCaptureAndSearch,

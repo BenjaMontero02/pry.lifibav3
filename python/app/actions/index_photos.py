@@ -3,19 +3,23 @@ import sys
 import time
 import traceback
 
-import cv2
-import faiss
 import numpy as np
 
 from app.errors import describe_error_with_origin
 from app.progress import write_progress_event
 from app.services.face_index_service import (
+    DETECTION_SIZE,
+    LARGE_IMAGE_DETECTION_SIZE,
+    LARGE_IMAGE_MIN_SIDE,
     create_empty_index,
+    detect_faces,
     extract_face_embedding,
+    face_size_px,
     get_face_analyzer,
     get_face_model_name,
     is_id_mapped_index,
     load_index,
+    save_index,
 )
 from app.services.file_service import (
     file_signature,
@@ -23,6 +27,7 @@ from app.services.file_service import (
     load_json_file_with_status,
     save_json_file_if_changed,
 )
+from app.services.image_service import read_image_bgr
 
 SAVE_CHECKPOINT_EVERY = 25
 # Cuantos tracebacks completos se escriben a stderr por corrida. Cuando falla
@@ -33,9 +38,14 @@ PROGRESS_EVENT_EVERY = 25
 PROGRESS_VERBOSE_LIMIT = 50
 ALWAYS_EMIT_PROGRESS_STATUSES = {"error", "missing_file", "unreadable"}
 
-# Larger detector input than the 640x640 default so small/distant faces
-# (players far from the camera in event photos) are still detected.
-INDEX_DET_SIZE = (1024, 1024)
+# Version de la logica de indexado. Subirla cuando un cambio de codigo altere
+# que caras se detectan o como se embeben: fuerza un rebuild en el proximo scan.
+PIPELINE_VERSION = 2
+
+# Estados finales: una foto con firma sin cambios y uno de estos estados se
+# saltea. "error" y "unreadable" se reintentan SIEMPRE (pueden ser transitorios:
+# modelo que no cargo, archivo a medio copiar, disco de red).
+SKIPPABLE_STATUSES = {"indexed", "no_faces", "faces_filtered"}
 
 # Quality gate for indexing: tiny or low-confidence detections (background
 # crowd) produce noisy embeddings that cause false positives in search.
@@ -51,12 +61,7 @@ def _passes_quality_filter(face, min_face_size=None, min_det_score=None):
     if min_det_score is None:
         min_det_score = DEFAULT_MIN_FACE_DET_SCORE
 
-    bbox = getattr(face, "bbox", None)
-    if bbox is None or len(bbox) < 4:
-        return False
-    width = float(bbox[2]) - float(bbox[0])
-    height = float(bbox[3]) - float(bbox[1])
-    if min(width, height) < min_face_size:
+    if face_size_px(face) < min_face_size:
         return False
 
     det_score = getattr(face, "det_score", None)
@@ -144,6 +149,29 @@ def _is_signature_changed(existing, current_signature):
         int(existing.get("mtime_ns", -1)) != current_signature["mtime_ns"]
         or int(existing.get("size", -1)) != current_signature["size"]
     )
+
+
+def _build_pipeline_fingerprint(min_face_size, min_det_score):
+    """Todo lo que cambia que caras entran al indice. Se guarda en el manifest:
+    si difiere del de la corrida anterior, el indice se reconstruye (antes
+    cambiar los ajustes solo afectaba a fotos nuevas)."""
+    return {
+        "version": PIPELINE_VERSION,
+        "embeddingModel": get_face_model_name(),
+        "detectionSize": list(DETECTION_SIZE),
+        "largeImageDetectionSize": list(LARGE_IMAGE_DETECTION_SIZE),
+        "largeImageMinSide": LARGE_IMAGE_MIN_SIDE,
+        "minFaceSizePx": int(min_face_size),
+        "minFaceDetScore": round(float(min_det_score), 4),
+    }
+
+
+def _can_skip_photo(existing_state, signature):
+    if signature is None or not isinstance(existing_state, dict):
+        return False
+    if _is_signature_changed(existing_state, signature):
+        return False
+    return existing_state.get("status") in SKIPPABLE_STATUSES
 
 
 def _classify_photo_changes(photo_paths, file_signatures, photos_state):
@@ -254,7 +282,7 @@ def _save_dirty_artifacts(
 ):
     writes = {"index": False, "vectors": False, "manifest": False}
     if dirty_index:
-        faiss.write_index(index, index_path)
+        save_index(index, index_path)
         writes["index"] = True
     if dirty_vectors:
         writes["vectors"] = save_json_file_if_changed(vectors_path, vectors)
@@ -289,8 +317,12 @@ def index_photos(data, request_id):
     for photo_path in photo_paths:
         try:
             file_signatures[photo_path] = file_signature(photo_path)
-        except FileNotFoundError:
+        except OSError:
+            # Borrada entre el listado y el stat, sin permisos, disco de red
+            # caido: se reporta como missing_file sin abortar la corrida.
             continue
+
+    pipeline_fingerprint = _build_pipeline_fingerprint(min_face_size, min_det_score)
 
     index_exists = os.path.exists(index_path)
     vectors_exists = os.path.exists(vectors_path)
@@ -339,6 +371,16 @@ def index_photos(data, request_id):
     ):
         rebuild_reason = "embedding_model_changed"
 
+    # Cambiaron los ajustes de deteccion (tamano minimo, precision) o la logica
+    # de indexado: las fotos ya procesadas se habrian quedado con el resultado
+    # viejo y el catalogo dependeria del historial de corridas.
+    if (
+        rebuild_reason is None
+        and photos_state
+        and manifest.get("pipeline") != pipeline_fingerprint
+    ):
+        rebuild_reason = "pipeline_changed"
+
     if rebuild_reason is not None:
         index = create_empty_index()
         vectors = []
@@ -362,21 +404,44 @@ def index_photos(data, request_id):
         manifest["embedding_model"] = get_face_model_name()
         dirty_manifest = True
 
-    # Incremental removal: drop stale vectors (removed or modified photos) from
-    # the IDMap2 index instead of rebuilding everything. Modified photos are
-    # reprocessed below because their signature changed.
+    if manifest.get("pipeline") != pipeline_fingerprint:
+        manifest["pipeline"] = pipeline_fingerprint
+        dirty_manifest = True
+
+    # Fotos que esta corrida va a (re)procesar. El loop y la carga del modelo
+    # usan este mismo conjunto: si discreparan, una foto a reintentar llegaria
+    # al loop sin detector cargado.
+    if rebuild_reason is None:
+        paths_to_process = {
+            photo_path
+            for photo_path in photo_paths
+            if file_signatures.get(photo_path) is not None
+            and not _can_skip_photo(photos_state.get(photo_path), file_signatures[photo_path])
+        }
+    else:
+        paths_to_process = {
+            photo_path for photo_path in photo_paths if file_signatures.get(photo_path) is not None
+        }
+
+    # Incremental removal: drop stale vectors from the IDMap2 index instead of
+    # rebuilding everything. Stale = photo no longer in the folder, or photo
+    # about to be reprocessed (modified, retried, or left with vectors but no
+    # manifest entry by a crash between checkpoint writes). Removing them first
+    # makes reprocessing idempotent: a photo can never end up with its faces
+    # indexed twice.
     faces_removed_from_index = 0
     if rebuild_reason is None:
         current_paths = set(photo_paths)
         removed_paths = {
             photo_path for photo_path in photos_state if photo_path not in current_paths
         }
-        modified_paths = {
-            photo_path
-            for photo_path, change_type in photo_changes["byPath"].items()
-            if change_type == "modified"
-        }
-        stale_paths = removed_paths | modified_paths
+        stale_paths = set()
+        for vector_row in vectors:
+            if not isinstance(vector_row, dict):
+                continue
+            vector_photo_path = vector_row.get("photo_path")
+            if vector_photo_path not in current_paths or vector_photo_path in paths_to_process:
+                stale_paths.add(vector_photo_path)
         if stale_paths:
             stale_ids = [
                 vector_row["id"]
@@ -410,6 +475,7 @@ def index_photos(data, request_id):
     processed_new_photos = 0
     processed_modified_photos = 0
     reprocessed_unchanged_photos = 0
+    retried_photos = 0
     new_faces_indexed = 0
     faces_indexed_from_new_or_modified_photos = 0
     faces_reindexed_from_unchanged_photos = 0
@@ -422,19 +488,13 @@ def index_photos(data, request_id):
 
     tracebacks_written = 0
 
-    analyzer = None
-    has_processing_work = any(
-        file_signatures.get(photo_path) is not None
-        and (
-            rebuild_reason is not None
-            or photo_changes["byPath"].get(photo_path) != "unchanged"
-        )
-        for photo_path in photo_paths
-    )
-    if has_processing_work:
-        analyzer = get_face_analyzer(det_size=INDEX_DET_SIZE)
+    if paths_to_process:
+        # Carga los modelos antes del loop: si fallan, falla la corrida entera
+        # con un error claro en vez de marcar cada foto como "error".
+        get_face_analyzer()
 
     started_at = time.time()
+    processing_ms_total = 0.0
 
     def save_dirty_artifacts():
         nonlocal dirty_index, dirty_vectors, dirty_manifest
@@ -466,12 +526,7 @@ def index_photos(data, request_id):
         existing_state = photos_state.get(photo_path)
         change_type = photo_changes["byPath"].get(photo_path, "new")
 
-        if (
-            rebuild_reason is None
-            and signature is not None
-            and existing_state is not None
-            and not _is_signature_changed(existing_state, signature)
-        ):
+        if signature is not None and photo_path not in paths_to_process:
             skipped_existing += 1
             skipped_unchanged_photos += 1
             _write_photo_progress(
@@ -505,9 +560,16 @@ def index_photos(data, request_id):
             processed_modified_photos += 1
         elif change_type == "unchanged":
             reprocessed_unchanged_photos += 1
+        if (
+            rebuild_reason is None
+            and isinstance(existing_state, dict)
+            and existing_state.get("status") not in SKIPPABLE_STATUSES
+        ):
+            retried_photos += 1
 
+        photo_started_at = time.perf_counter()
         try:
-            image = cv2.imread(photo_path)
+            image = read_image_bgr(photo_path)
             if image is None:
                 unreadable_photos += 1
                 photos_state[photo_path] = {
@@ -515,6 +577,7 @@ def index_photos(data, request_id):
                     "size": signature["size"],
                     "faces_detected": 0,
                     "status": "unreadable",
+                    "error": "No se pudo decodificar la imagen (formato no soportado o archivo danado).",
                     "indexed_at": int(time.time()),
                 }
                 dirty_manifest = True
@@ -531,15 +594,19 @@ def index_photos(data, request_id):
                     save_dirty_artifacts()
                 continue
 
-            faces = analyzer.get(image)
+            # El detector ya descarta las caras bajo min_det_score; el filtro de
+            # calidad queda para el tamano minimo.
+            faces = detect_faces(image, min_det_score)
             valid_embeddings = []
             for face in faces:
                 if not _passes_quality_filter(face, min_face_size, min_det_score):
                     faces_filtered_by_quality += 1
                     continue
                 embedding = extract_face_embedding(image, face)
-                if embedding is not None:
-                    valid_embeddings.append(embedding)
+                if embedding is None:
+                    faces_filtered_by_quality += 1
+                    continue
+                valid_embeddings.append(embedding)
 
             faces_detected = len(valid_embeddings)
             if faces_detected == 0:
@@ -638,6 +705,8 @@ def index_photos(data, request_id):
                 change_type,
                 error=described_error,
             )
+        finally:
+            processing_ms_total += (time.perf_counter() - photo_started_at) * 1000
 
         if processed_photos % SAVE_CHECKPOINT_EVERY == 0:
             save_dirty_artifacts()
@@ -670,6 +739,7 @@ def index_photos(data, request_id):
         "vectorsPath": vectors_path,
         "manifestPath": manifest_path,
         "rebuildReason": rebuild_reason,
+        "pipeline": pipeline_fingerprint,
         "stats": {
             "processedPhotos": processed_photos,
             "totalPhotos": total_photos,
@@ -687,6 +757,7 @@ def index_photos(data, request_id):
             "processedModifiedPhotos": processed_modified_photos,
             "modifiedPhotosProcessed": processed_modified_photos,
             "reprocessedUnchangedPhotos": reprocessed_unchanged_photos,
+            "retriedPhotos": retried_photos,
             "removedPhotosDetected": photo_changes["removedPhotos"],
             "photosRemovedFromManifest": photo_changes["removedPhotos"],
             "facesRemovedFromIndex": faces_removed_from_index,
@@ -717,5 +788,10 @@ def index_photos(data, request_id):
             "indexRebuilt": rebuild_reason is not None,
             "artifactWrites": artifact_write_counts,
             "elapsedMs": elapsed_ms,
+            "avgMsPerProcessedPhoto": (
+                int(processing_ms_total / photos_processed_for_indexing)
+                if photos_processed_for_indexing
+                else 0
+            ),
         },
     }

@@ -1,5 +1,9 @@
-insightface
-onnxruntime
-faiss-cpu
-Pillow
-opencv-python
+# Versiones fijas: un cambio de version del detector o de onnxruntime cambia
+# que caras se detectan, y el indice quedaria inconsistente entre instalaciones.
+# El codigo depende de la API de insightface 1.0.x (SCRFD.detect multi-escala).
+insightface==1.0.1
+onnxruntime==1.27.0
+faiss-cpu==1.14.3
+numpy==2.4.6
+Pillow==12.3.0
+opencv-python==4.13.0.92
