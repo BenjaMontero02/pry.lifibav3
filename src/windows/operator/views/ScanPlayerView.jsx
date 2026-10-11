@@ -9,6 +9,7 @@ export default function ScanPlayerView({
   scanQueryExpansion,
   scanMultiAngle,
   scanPrompt,
+  facePreview,
   indexingPhotos,
   scanCameraStarting,
   scanCameraActive,
@@ -219,7 +220,7 @@ export default function ScanPlayerView({
           />
           <span>
             Escaneo en 3 angulos (experimental): guia al jugador para mirar de frente y girar un poco a cada
-            lado, y busca con cada angulo. Ayuda con fotos de perfil; tarda unos 6 segundos. Esc cancela.
+            lado, y busca con cada angulo. Ayuda con fotos de perfil; tarda unos 9 segundos. Esc cancela.
           </span>
         </label>
       </div>
@@ -238,6 +239,11 @@ export default function ScanPlayerView({
           {scanPrompt ? (
             <p className="scan-prompt-overlay" role="status" aria-live="assertive">
               {scanPrompt}
+            </p>
+          ) : null}
+          {facePreview && !scanPrompt ? (
+            <p className={`scan-face-indicator scan-face-${facePreview.state}`} aria-live="polite">
+              {facePreview.message}
             </p>
           ) : null}
           {scanCameraStarting || (scanCameraActive && !scanVideoReady) ? (

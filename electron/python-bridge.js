@@ -21,6 +21,8 @@ const REQUEST_TIMEOUT_MS_BY_ACTION = {
   // "started" llega antes de cargar los modelos faciales: la primera busqueda
   // puede tardar bastante mas que el resto. Si vence, el proceso se reinicia.
   find_player: 3 * 60_000,
+  // El primer indicador de camara tambien puede cargar los modelos.
+  preview_face: 3 * 60_000,
   // Inactivity timeout: index_photos streams progress events over stdout and
   // every progress event for the request re-arms this timer, so it only fires
   // after the Python process stops reporting activity for this long.

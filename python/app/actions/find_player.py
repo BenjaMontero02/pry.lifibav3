@@ -65,6 +65,10 @@ QUERY_ANGLE_IDENTITY_MIN = 0.25
 # distancias interoculares) respecto del frente para dar por girada la cabeza.
 # Solo avisa, no descarta: el preview puede estar espejado y el signo no sirve.
 QUERY_ANGLE_MIN_TURN = 0.12
+# Las caras giradas dan menos confianza en el detector que las de frente: en los
+# angulos laterales se acepta menos (el chequeo de identidad contra el frente
+# frena una cara equivocada). El frente mantiene QUERY_MIN_DET_SCORE.
+QUERY_SIDE_MIN_DET_SCORE = 0.35
 
 _artifact_cache = {
     "index_path": None,
@@ -373,7 +377,7 @@ def _primary_face_embedding(image):
     return embedding, quality
 
 
-def _primary_face(image):
+def _primary_face(image, min_det_score=QUERY_MIN_DET_SCORE):
     """``(embedding, quality, face)`` of the player's face in a webcam frame.
 
     The player stands in front of the camera, so the main face is the biggest
@@ -382,18 +386,21 @@ def _primary_face(image):
     """
     faces = [
         face
-        for face in detect_faces(image, QUERY_MIN_DET_SCORE)
+        for face in detect_faces(image, min_det_score)
         if face_size_px(face) >= QUERY_MIN_FACE_SIZE_PX
     ]
-    faces.sort(
-        key=lambda face: (face_size_px(face) ** 2) * float(face.det_score),
-        reverse=True,
-    )
+    faces.sort(key=_primary_face_rank, reverse=True)
     for face in faces:
         embedding, quality = extract_face_embedding_with_quality(image, face)
         if embedding is not None:
             return embedding, quality, face
     return None, None, None
+
+
+def _primary_face_rank(face):
+    """La cara del jugador es la mas grande, ponderada por confianza: elegir solo
+    por confianza dejaba ganar a alguien de frente sobre el jugador de perfil."""
+    return (face_size_px(face) ** 2) * float(face.det_score)
 
 
 def _estimate_yaw(face):
@@ -444,7 +451,7 @@ def _resolve_frame_groups(data):
     return resolved
 
 
-def _angle_group_template(frames_b64):
+def _angle_group_template(frames_b64, min_det_score=QUERY_MIN_DET_SCORE):
     """Plantilla de un angulo: frames consistentes ENTRE SI (no contra el frente,
     que descartaria justamente los girados), ponderados por calidad."""
     embeddings = []
@@ -452,7 +459,7 @@ def _angle_group_template(frames_b64):
     yaws = []
     for frame_b64 in frames_b64:
         image = _decode_frame_image(frame_b64)
-        embedding, quality, face = _primary_face(image)
+        embedding, quality, face = _primary_face(image, min_det_score)
         if embedding is not None:
             embeddings.append(embedding)
             qualities.append(quality)
@@ -495,7 +502,12 @@ def _build_angle_templates(frame_groups):
     ``[(nombre, embedding)]``: primero el promedio de todos los frames aceptados
     (la consulta equivalente al escaneo comun) y despues cada angulo aceptado.
     Sin cara frontal devuelve plantillas vacias."""
-    groups = {angle: _angle_group_template(frames) for angle, frames in frame_groups}
+    groups = {
+        angle: _angle_group_template(
+            frames, QUERY_MIN_DET_SCORE if angle == "front" else QUERY_SIDE_MIN_DET_SCORE
+        )
+        for angle, frames in frame_groups
+    }
     front = groups["front"]
     angle_summary = [
         {

@@ -71,7 +71,7 @@ const MAX_SCAN_PROMPT_CHARS = 120;
 const SOURCE_PHOTO_SCHEME = "sourcephoto";
 const SOURCE_THUMB_SCHEME = "sourcethumb";
 const PHOTO_INDEX_STATUS_TABLE = "photo_index_status";
-const PYTHON_ACTIONS = new Set(["ping", "index_photos", "find_player"]);
+const PYTHON_ACTIONS = new Set(["ping", "index_photos", "find_player", "preview_face"]);
 const DEFAULT_PHOTOS_PAGE_SIZE = 160;
 const MAX_PHOTOS_PAGE_SIZE = 500;
 const PHOTO_LIST_CACHE_MAX_AGE_MS = 30_000;
@@ -1704,7 +1704,8 @@ function clearFaceIndex() {
 const PYTHON_ACTION_DATA_FIELDS = {
   ping: [],
   index_photos: ["forceReindex"],
-  find_player: ["frames", "frameGroups", "similarityThreshold", "maxResults", "queryExpansion"]
+  find_player: ["frames", "frameGroups", "similarityThreshold", "maxResults", "queryExpansion"],
+  preview_face: ["frame"]
 };
 
 function pickPythonActionData(action, data) {
@@ -1988,7 +1989,12 @@ function registerIpc() {
     // renderer sin validar: si llega, tiene que ser la carpeta configurada.
     const requestedData = pickPythonActionData(action, data);
     let sourcePath = null;
-    if (action !== "ping") {
+    // El indicador de la camara pide cada ~500 ms: detras de un indexado quedaria
+    // encolado (y demoraria al escaneo que venga despues). Se contesta "ocupado".
+    if (action === "preview_face" && photoIndexPipelineBusy) {
+      return { ok: true, result: { busy: true } };
+    }
+    if (action !== "ping" && action !== "preview_face") {
       sourcePath = getSourcePathFromConfiguration({ required: true });
       if (data?.sourcePath !== undefined && data?.sourcePath !== null) {
         const requestedSourcePath = normalizeSourcePath(data.sourcePath);

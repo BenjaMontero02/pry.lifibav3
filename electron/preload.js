@@ -25,7 +25,7 @@ const EVENT_CHANNELS = new Set([
   "sourcepad:watch-error",
   "sourcepad:thumbnail-progress"
 ]);
-const PYTHON_ACTIONS = new Set(["ping", "index_photos", "find_player"]);
+const PYTHON_ACTIONS = new Set(["ping", "index_photos", "find_player", "preview_face"]);
 
 function assertAllowed(value, allowed, type) {
   if (!allowed.has(value)) {

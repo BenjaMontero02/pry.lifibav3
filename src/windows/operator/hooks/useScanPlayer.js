@@ -10,7 +10,15 @@ const MAX_SIMILARITY_THRESHOLD = 0.8;
 // un corte distinto en cada escaneo y sin aviso de que habia mas.
 const SCAN_MAX_RESULTS = 200;
 const SCAN_SETTINGS_STORAGE_KEY = "lifiba.scanSettings.v1";
-const SCAN_CAPTURE_MAX_DIMENSION = 720;
+// Se captura a la resolucion pedida a la camara (1280x720): achicar a 720 px
+// dejaba la cara de un jugador alejado del celular cerca del minimo de 32 px.
+const SCAN_CAPTURE_MAX_DIMENSION = 1280;
+// Indicador en vivo: frame chico cada ~500 ms al detector (sin embeddings).
+const FACE_PREVIEW_MAX_DIMENSION = 480;
+const FACE_PREVIEW_INTERVAL_MS = 500;
+const FACE_PREVIEW_ERROR_BACKOFF_MS = 3000;
+// Margen sobre el minimo de la busqueda para decir "buen tamano".
+const FACE_PREVIEW_SIZE_MARGIN = 1.5;
 const SCAN_CAPTURE_JPEG_QUALITY = 0.82;
 const SCAN_CAMERA_START_TIMEOUT_MS = 8_000;
 // Frames repartidos en ~1.2 s: con 4 frames en 750 ms eran casi identicos y
@@ -131,10 +139,10 @@ function getCameraErrorMessage(error) {
   return `No se pudo iniciar la webcam: ${String(error?.message || error)}`;
 }
 
-function captureVideoFrame(videoElement, canvasElement) {
+function captureVideoFrame(videoElement, canvasElement, maxDimension = SCAN_CAPTURE_MAX_DIMENSION) {
   const sourceWidth = videoElement.videoWidth || 1280;
   const sourceHeight = videoElement.videoHeight || 720;
-  const scale = Math.min(1, SCAN_CAPTURE_MAX_DIMENSION / Math.max(sourceWidth, sourceHeight));
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
   const width = Math.max(1, Math.round(sourceWidth * scale));
   const height = Math.max(1, Math.round(sourceHeight * scale));
 
@@ -148,6 +156,26 @@ function captureVideoFrame(videoElement, canvasElement) {
 
   context.drawImage(videoElement, 0, 0, width, height);
   return canvasElement.toDataURL("image/jpeg", SCAN_CAPTURE_JPEG_QUALITY);
+}
+
+// Estado del indicador a partir de la respuesta de preview_face. El tamano viene
+// en pixeles del frame chico: se escala a la resolucion con la que se captura.
+function describeFacePreview(result, videoElement) {
+  if (!result || result.busy) {
+    return { state: "paused", message: "Indicador en pausa mientras se analizan fotos." };
+  }
+  if (!result.primary) {
+    return { state: "none", message: "No se ve ninguna cara." };
+  }
+  const longest = Math.max(videoElement?.videoWidth || 1280, videoElement?.videoHeight || 720);
+  const captureScale = Math.min(1, SCAN_CAPTURE_MAX_DIMENSION / longest);
+  const previewScale = Math.min(1, FACE_PREVIEW_MAX_DIMENSION / longest);
+  const sizeAtCapture = (Number(result.primary.sizePx) * captureScale) / previewScale;
+  const crowdText = result.faceCount > 1 ? ` Hay ${result.faceCount} caras: se usa la mas grande.` : "";
+  if (sizeAtCapture < Number(result.minFaceSizePx || 32) * FACE_PREVIEW_SIZE_MARGIN) {
+    return { state: "small", message: `Cara muy chica: que el jugador se acerque a la camara.${crowdText}` };
+  }
+  return { state: "ok", message: `Cara detectada.${crowdText}` };
 }
 
 function getUserMediaWithTimeout(constraints) {
@@ -191,6 +219,9 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const scanMultiAngle = scanSettings.multiAngle;
   // Indicacion visible durante la captura guiada (operador y pantalla del jugador).
   const [scanPrompt, setScanPrompt] = useState(null);
+  // Indicador en vivo de la camara: {state: ok|small|none|paused, message} o null.
+  const [facePreview, setFacePreview] = useState(null);
+  const facePreviewCanvasRef = useRef(null);
   const [scanVideoReady, setScanVideoReady] = useState(false);
   const [scanCameraActive, setScanCameraActive] = useState(false);
   const [scanCameraStarting, setScanCameraStarting] = useState(false);
@@ -643,6 +674,51 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     setScanCameraEnabled((current) => !current);
   }, []);
 
+  // Indicador en vivo: solo con la vista de escaneo abierta, la camara lista y sin
+  // un escaneo en curso (no compite con la captura ni encola pedidos en Python).
+  useEffect(() => {
+    if (activeView !== "scan-player" || !scanCameraActive || !scanVideoReady || scanInProgress) {
+      setFacePreview(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let timeoutId = 0;
+
+    const tick = async () => {
+      const videoElement = scanVideoRef.current;
+      let nextDelay = FACE_PREVIEW_INTERVAL_MS;
+      try {
+        if (!videoElement) {
+          return;
+        }
+        if (!facePreviewCanvasRef.current) {
+          facePreviewCanvasRef.current = document.createElement("canvas");
+        }
+        const frame = captureVideoFrame(videoElement, facePreviewCanvasRef.current, FACE_PREVIEW_MAX_DIMENSION);
+        const response = await desktopApi.sendToPython("preview_face", { frame });
+        if (!cancelled) {
+          setFacePreview(describeFacePreview(response?.result, videoElement));
+        }
+      } catch {
+        // Un fallo del indicador no molesta al operador: se oculta y se reintenta mas tarde.
+        if (!cancelled) {
+          setFacePreview(null);
+        }
+        nextDelay = FACE_PREVIEW_ERROR_BACKOFF_MS;
+      } finally {
+        if (!cancelled) {
+          timeoutId = window.setTimeout(tick, nextDelay);
+        }
+      }
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeView, desktopApi, scanCameraActive, scanInProgress, scanVideoReady]);
+
   const handleScanVideoLoadedMetadata = useCallback(() => {
     setScanVideoReady(true);
     setScanCameraStarting(false);
@@ -687,6 +763,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     scanQueryExpansion,
     scanMultiAngle,
     scanPrompt,
+    facePreview,
     scanCameraStarting,
     scanCameraActive,
     scanVideoReady,

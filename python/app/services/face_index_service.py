@@ -112,6 +112,10 @@ PRECISE_IMAGE_DETECTION_SIZE = (3072, 3072)
 # Por debajo de esto la pasada 3072 solo agranda la foto: no suma caras.
 PRECISE_IMAGE_MIN_SIDE = 2400
 
+# Indicador en vivo de la camara: una sola pasada chica, solo para saber si hay
+# una cara y de que tamano (no se calculan embeddings).
+PREVIEW_DETECTION_SIZE = (640, 640)
+
 _face_analyzer = None
 
 
@@ -320,7 +324,7 @@ def detection_sizes_for(image, detection_mode=DETECTION_MODE_STANDARD):
     return sizes
 
 
-def detect_faces(image_bgr, det_thresh, detection_mode=DETECTION_MODE_STANDARD):
+def detect_faces(image_bgr, det_thresh, detection_mode=DETECTION_MODE_STANDARD, input_sizes=None):
     """Detecta caras (bbox, kps, det_score) sin correr ningun otro modelo.
 
     Llama al detector directamente en vez de ``FaceAnalysis.get``: ``get``
@@ -330,9 +334,8 @@ def detect_faces(image_bgr, det_thresh, detection_mode=DETECTION_MODE_STANDARD):
     """
     det_model = get_face_analyzer().det_model
     det_model.det_thresh = float(det_thresh)
-    bboxes, kpss = det_model.detect(
-        image_bgr, input_size=detection_sizes_for(image_bgr, detection_mode)
-    )
+    sizes = input_sizes if input_sizes is not None else detection_sizes_for(image_bgr, detection_mode)
+    bboxes, kpss = det_model.detect(image_bgr, input_size=sizes)
 
     faces = []
     for position in range(bboxes.shape[0]):

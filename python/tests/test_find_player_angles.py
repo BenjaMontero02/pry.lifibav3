@@ -44,7 +44,7 @@ OTHER = _unit(E[2])
 
 def _patch_frames(monkeypatch, frames):
     monkeypatch.setattr(find_player_module, "_decode_frame_image", lambda frame: frame)
-    monkeypatch.setattr(find_player_module, "_primary_face", lambda frame: frames[frame])
+    monkeypatch.setattr(find_player_module, "_primary_face", lambda frame, _min_det=0.5: frames[frame])
 
 
 def _write_index(tmp_path, rows_with_vectors):
@@ -209,3 +209,58 @@ def test_find_player_without_front_face_reports_no_face(tmp_path, monkeypatch):
         "framesTotal": 1,
         "yaw": None,
     }
+
+
+def test_side_angles_use_a_lower_detector_floor(monkeypatch):
+    seen = {}
+
+    def fake_primary(frame, min_det_score=0.5):
+        seen[frame] = min_det_score
+        return {"f1": FRONT, "l1": LEFT}[frame], 22.0, _FakeFace(0.0)
+
+    monkeypatch.setattr(find_player_module, "_decode_frame_image", lambda frame: frame)
+    monkeypatch.setattr(find_player_module, "_primary_face", fake_primary)
+
+    find_player_module._build_angle_templates([("front", ["f1"]), ("left", ["l1"])])
+
+    assert seen["f1"] == find_player_module.QUERY_MIN_DET_SCORE
+    assert seen["l1"] == find_player_module.QUERY_SIDE_MIN_DET_SCORE < seen["f1"]
+
+
+def test_preview_face_reports_primary_face_and_count(monkeypatch):
+    from app.actions import preview_face as preview_module
+
+    class _BoxFace(_FakeFace):
+        def __init__(self, bbox, det_score):
+            super().__init__(0.0)
+            self.bbox = np.asarray(bbox, dtype=np.float32)
+            self.det_score = det_score
+
+    calls = {}
+
+    def fake_detect(_image, threshold, input_sizes=None):
+        calls["sizes"] = input_sizes
+        return [_BoxFace([10, 10, 40, 40], 0.9), _BoxFace([100, 50, 220, 170], 0.8)]
+
+    monkeypatch.setattr(preview_module, "_decode_frame_image", lambda _frame: np.zeros((240, 320, 3), np.uint8))
+    monkeypatch.setattr(preview_module, "detect_faces", fake_detect)
+
+    result = preview_module.preview_face({"frame": "x"}, "req-pv")
+
+    assert calls["sizes"] == [preview_module.PREVIEW_DETECTION_SIZE]
+    assert result["faceCount"] == 2
+    assert result["frameWidth"] == 320 and result["frameHeight"] == 240
+    assert result["primary"]["sizePx"] == 120.0
+    assert result["primary"]["box"] == [0.3125, 0.2083, 0.6875, 0.7083]
+
+
+def test_preview_face_without_faces(monkeypatch):
+    from app.actions import preview_face as preview_module
+
+    monkeypatch.setattr(preview_module, "_decode_frame_image", lambda _frame: np.zeros((240, 320, 3), np.uint8))
+    monkeypatch.setattr(preview_module, "detect_faces", lambda *_args, **_kwargs: [])
+
+    result = preview_module.preview_face({"frame": "x"}, "req-pv0")
+
+    assert result["faceCount"] == 0
+    assert result["primary"] is None

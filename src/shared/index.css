@@ -1188,6 +1188,36 @@ body {
   text-align: center;
 }
 
+/* Indicador en vivo de la camara, debajo del video. */
+.scan-face-indicator {
+  margin: 0.55rem 0 0;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.scan-face-ok {
+  background: rgba(22, 163, 74, 0.12);
+  color: #166534;
+}
+
+.scan-face-small {
+  background: rgba(217, 119, 6, 0.14);
+  color: #92400e;
+}
+
+.scan-face-none {
+  background: rgba(220, 38, 38, 0.1);
+  color: #991b1b;
+}
+
+.scan-face-paused {
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
 /* Foto que solo entro por un angulo girado: el operador la revisa antes de imprimir. */
 .scan-match-angle {
   position: absolute;

@@ -131,6 +131,7 @@ export default function App() {
               scanQueryExpansion={scan.scanQueryExpansion}
               scanMultiAngle={scan.scanMultiAngle}
               scanPrompt={scan.scanPrompt}
+              facePreview={scan.facePreview}
               indexingPhotos={photos.indexingPhotos}
               scanCameraStarting={scan.scanCameraStarting}
               scanCameraActive={scan.scanCameraActive}
