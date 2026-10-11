@@ -5,7 +5,6 @@ const { pathToFileURL } = require("url");
 const { BrowserWindow } = require("electron");
 
 const PRINT_LOAD_TIMEOUT_MS = 30_000;
-const PRINT_JOB_TIMEOUT_MS = 180_000;
 
 function escapeHtmlAttribute(value) {
   return String(value)
@@ -99,29 +98,17 @@ async function countBrokenImages(printWindow) {
   return Number(broken) || 0;
 }
 
+// Sin timeout a proposito: el callback llega cuando el operador cierra el dialogo
+// nativo de impresion, que puede tardar lo que quiera. Un timeout aca destruia la
+// ventana con el dialogo abierto, y la UI mostraba error aunque la foto se imprimia.
 function runPrintJob(printWindow) {
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const timeoutId = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      reject(new Error("La impresora no respondio a tiempo."));
-    }, PRINT_JOB_TIMEOUT_MS);
-
     printWindow.webContents.print(
       {
         silent: false,
         printBackground: true
       },
       (success, failureReason) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeoutId);
-
         if (success) {
           resolve({ printed: true, cancelled: false });
           return;

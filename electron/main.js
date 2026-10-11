@@ -2,7 +2,7 @@ const path = require("path");
 const { pathToFileURL, fileURLToPath } = require("url");
 const fs = require("fs");
 const { createHash } = require("crypto");
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, screen, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, screen, session, shell } = require("electron");
 const Database = require("better-sqlite3");
 const { createPythonBridge } = require("./python-bridge");
 const { printPhotos } = require("./print-service");
@@ -13,9 +13,18 @@ let operatorWindow = null;
 let playerWindow = null;
 let playerPreviewPayload = { photos: [], updatedAt: null };
 let photoListCache = { sourcePath: null, loadedAt: 0, photos: [] };
+// Se incrementa en cada invalidacion: un listado que empezo antes no se cachea.
+let photoListCacheGeneration = 0;
+let photoIndexStatusVersion = 0;
+let photoIndexStatusRowsCache = { version: -1, sourceKey: null, rows: null };
+let photoIndexPipelineBusy = false;
 let sourcepadWatcher = null;
 let sourcepadRescanTimer = null;
 let sourcepadRescanInFlight = null;
+// Se incrementa con cada cambio detectado: el scan compara contra el valor de su inicio.
+let sourcepadEventSeq = 0;
+// Hubo un cambio mientras corria un scan: al terminar hay que correr otro.
+let sourcepadRescanPending = false;
 let sourcepadWatchToken = 0;
 let sourcepadWatchState = {
   sourcePath: null,
@@ -63,6 +72,16 @@ const THUMBNAIL_PREWARM_CONCURRENCY = 2;
 const THUMBNAIL_PREWARM_RESCAN_LIMIT = 240;
 const THUMBNAIL_PREWARM_PROGRESS_INTERVAL_MS = 600;
 const SQLITE_BIND_CHUNK_SIZE = 900;
+// Cache de miniaturas: al pasar el tope se borran las mas viejas hasta 80% del tope.
+const THUMBNAIL_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+const THUMBNAIL_CACHE_PRUNE_EVERY_WRITES = 100;
+// Lado mayor de la miniatura. Va en la clave del cache: las de otro tamano no se reusan.
+const THUMBNAIL_SIZE_PX = 512;
+let thumbnailWritesSincePrune = 0;
+let thumbnailPrunePromise = null;
+// Permisos del navegador que se conceden a las ventanas propias. "media" es la camara
+// (getUserMedia y los labels de enumerateDevices); "fullscreen" lo usa el jugador.
+const APP_GRANTED_PERMISSIONS = new Set(["media", "fullscreen"]);
 const PHOTO_STATUS_FILTERS = new Set(["all", "pending", "indexed", "no_faces", "faces_filtered", "error"]);
 // Tiene que coincidir con IMAGE_EXTENSIONS de python/app/services/file_service.py:
 // una extension que se lista aca pero Python no indexa queda "pendiente" para
@@ -94,7 +113,11 @@ function isPathInsideDirectory(filePath, directoryPath) {
   const file = path.resolve(filePath || "");
   const root = path.resolve(directoryPath || "");
   const relativePath = path.relative(root, file);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+  // "..foo" es un nombre valido dentro de la carpeta: solo rechazar ".." como segmento.
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
+  );
 }
 
 function realPathSync(value) {
@@ -155,6 +178,7 @@ function getPublicIndexedStatusFromIndexRow(statusRow) {
 }
 
 function clearPhotoListCache(sourcePath = null) {
+  photoListCacheGeneration += 1;
   if (!sourcePath) {
     photoListCache = { sourcePath: null, loadedAt: 0, photos: [] };
     return;
@@ -394,6 +418,7 @@ function handleSourcepadDirty(sourcePath, eventType, filename) {
   };
 
   clearPhotoListCache(sourcePath);
+  sourcepadEventSeq += 1;
   sourcepadWatchState.dirty = true;
   sourcepadWatchState.lastEvent = event;
   sourcepadWatchState.lastChangedAt = now;
@@ -423,9 +448,13 @@ async function rescanSourcepad(options = {}) {
     sourcepadRescanInFlight &&
     normalizeComparablePath(sourcepadRescanInFlight.sourcePath) === sourceKey
   ) {
+    // Sin segundo scan en paralelo: el en vuelo puede haber listado antes del cambio,
+    // asi que al terminar se corre otro (ver finally).
+    sourcepadRescanPending = true;
     return sourcepadRescanInFlight.promise;
   }
 
+  const eventSeqAtStart = sourcepadEventSeq;
   const promise = (async () => {
     clearPhotoListCache(sourcePath);
     const photos = await getCachedSourcePhotos(sourcePath, { refresh: true });
@@ -443,10 +472,17 @@ async function rescanSourcepad(options = {}) {
         })
       : getThumbnailPrewarmStatus();
 
+    // Si llego un cambio despues de iniciar el scan, el listado puede estar viejo:
+    // no se limpia dirty (el scan pendiente lo limpia).
+    const changedDuringScan = eventSeqAtStart !== sourcepadEventSeq;
+    if (stillCurrent && !changedDuringScan) {
+      sourcepadWatchState.dirty = false;
+    }
+
     const payload = {
       sourcePath,
       reason: options.reason || "manual",
-      dirty: false,
+      dirty: Boolean(sourcepadWatchState.dirty),
       stale: !stillCurrent,
       changedAt: sourcepadWatchState.lastChangedAt,
       scannedAt,
@@ -456,7 +492,6 @@ async function rescanSourcepad(options = {}) {
     };
 
     if (stillCurrent) {
-      sourcepadWatchState.dirty = false;
       sourcepadWatchState.lastScannedAt = scannedAt;
       sourcepadWatchState.lastError = null;
       payload.watchStatus = getSourcepadWatchStatus();
@@ -475,12 +510,23 @@ async function rescanSourcepad(options = {}) {
   } finally {
     if (sourcepadRescanInFlight?.promise === promise) {
       sourcepadRescanInFlight = null;
+      if (sourcepadRescanPending) {
+        sourcepadRescanPending = false;
+        const watchedSourcePath = sourcepadWatchState.sourcePath;
+        if (
+          watchedSourcePath &&
+          normalizeComparablePath(watchedSourcePath) === sourceKey
+        ) {
+          scheduleSourcepadRescan("pending-after-scan");
+        }
+      }
     }
   }
 }
 
 function stopSourcepadWatcher() {
   sourcepadWatchToken += 1;
+  sourcepadRescanPending = false;
   clearSourcepadRescanTimer();
   if (sourcepadWatcher) {
     sourcepadWatcher.close();
@@ -693,21 +739,65 @@ function syncPhotoIndexStatusFromManifest(sourcePath, manifestPath) {
     }
   });
 
-  transaction();
+  try {
+    transaction();
+  } finally {
+    invalidatePhotoIndexStatusCache();
+  }
+}
+
+// Migraciones numeradas por PRAGMA user_version. La posicion N+1 es la version N+1.
+// Son idempotentes: una base previa a user_version tiene user_version 0 pero ya trae
+// las tablas, asi que la migracion 1 solo las crea si faltan.
+const DATABASE_MIGRATIONS = [
+  () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS configuration (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        "key" TEXT NOT NULL UNIQUE,
+        "value" TEXT
+      )
+    `);
+    createPhotoIndexStatusTable();
+  }
+];
+
+function runDatabaseMigrations() {
+  const currentVersion = Number(db.pragma("user_version", { simple: true })) || 0;
+  if (currentVersion > DATABASE_MIGRATIONS.length) {
+    console.warn(
+      `[main] app.sqlite tiene user_version ${currentVersion}, mayor que la app (${DATABASE_MIGRATIONS.length}).`
+    );
+    return;
+  }
+
+  for (let version = currentVersion; version < DATABASE_MIGRATIONS.length; version += 1) {
+    db.transaction(() => {
+      DATABASE_MIGRATIONS[version]();
+      db.pragma(`user_version = ${version + 1}`);
+    })();
+  }
 }
 
 function createDatabase() {
   const dbPath = path.join(app.getPath("userData"), "app.sqlite");
   db = new Database(dbPath);
+  db.pragma("busy_timeout = 5000");
   db.pragma("journal_mode = WAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS configuration (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      "key" TEXT NOT NULL UNIQUE,
-      "value" TEXT
-    )
-  `);
-  createPhotoIndexStatusTable();
+  // Con WAL, synchronous = NORMAL es seguro frente a corrupcion y evita un fsync por escritura.
+  db.pragma("synchronous = NORMAL");
+  const journalMode = String(db.pragma("journal_mode", { simple: true }) || "").toLowerCase();
+  if (journalMode !== "wal") {
+    console.warn(`[main] app.sqlite no quedo en WAL (journal_mode: ${journalMode}).`);
+  }
+  runDatabaseMigrations();
+}
+
+// Cache de las filas de estado de un source. Se invalida en cada escritura de
+// photo_index_status (sync desde el manifest y limpieza del indice).
+function invalidatePhotoIndexStatusCache() {
+  photoIndexStatusVersion += 1;
+  photoIndexStatusRowsCache = { version: -1, sourceKey: null, rows: null };
 }
 
 function getWindowUrl(windowName) {
@@ -775,13 +865,82 @@ function createWindow(windowName, displayBounds) {
   return window;
 }
 
-function createAppWindows() {
-  const displays = screen.getAllDisplays();
-  const primary = displays[0].bounds;
-  const secondary = (displays[1] || displays[0]).bounds;
+// Con un solo monitor el jugador va en una ventana normal a la derecha del area de
+// trabajo, y el operador ocupa el resto: ninguna tapa a la otra.
+const SINGLE_DISPLAY_PLAYER_WIDTH_RATIO = 0.4;
 
-  operatorWindow = createWindow("operator", primary);
-  playerWindow = createWindow("player", secondary);
+function getOtherDisplay() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  return screen.getAllDisplays().find((display) => display.id !== primaryDisplay.id) || null;
+}
+
+function getOperatorBounds() {
+  if (getOtherDisplay()) {
+    return screen.getPrimaryDisplay().bounds;
+  }
+  const { workArea } = screen.getPrimaryDisplay();
+  const playerWidth = Math.round(workArea.width * SINGLE_DISPLAY_PLAYER_WIDTH_RATIO);
+  return { x: workArea.x, y: workArea.y, width: workArea.width - playerWidth, height: workArea.height };
+}
+
+function getPlayerBounds() {
+  const otherDisplay = getOtherDisplay();
+  if (otherDisplay) {
+    return otherDisplay.bounds;
+  }
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = Math.round(workArea.width * SINGLE_DISPLAY_PLAYER_WIDTH_RATIO);
+  return { x: workArea.x + workArea.width - width, y: workArea.y, width, height: workArea.height };
+}
+
+function createAppWindows() {
+  operatorWindow = createWindow("operator", getOperatorBounds());
+  playerWindow = createWindow("player", getPlayerBounds());
+}
+
+function rectsIntersect(a, b) {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+function isBoundsVisibleOnSomeDisplay(bounds) {
+  return screen.getAllDisplays().some((display) => rectsIntersect(bounds, display.workArea));
+}
+
+// Si un monitor se desconecta, la ventana que quedo en el fuera de pantalla se reubica.
+function relocateOffscreenWindows() {
+  if (operatorWindow && !operatorWindow.isDestroyed() && !isBoundsVisibleOnSomeDisplay(operatorWindow.getBounds())) {
+    operatorWindow.setBounds(getOperatorBounds());
+  }
+  if (playerWindow && !playerWindow.isDestroyed() && !isBoundsVisibleOnSomeDisplay(playerWindow.getBounds())) {
+    playerWindow.setBounds(getPlayerBounds());
+  }
+}
+
+function focusOperatorWindow() {
+  if (!operatorWindow || operatorWindow.isDestroyed()) {
+    return;
+  }
+  if (operatorWindow.isMinimized()) {
+    operatorWindow.restore();
+  }
+  operatorWindow.show();
+  operatorWindow.focus();
+}
+
+// Solo las ventanas propias (archivos de la app o el dev server) reciben permisos,
+// y solo los de APP_GRANTED_PERMISSIONS. El resto se niega.
+function configureSessionPermissions() {
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (!webContents || !APP_GRANTED_PERMISSIONS.has(permission)) {
+      return false;
+    }
+    return isAllowedNavigationUrl(webContents.getURL());
+  });
+
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl || webContents?.getURL() || "";
+    callback(APP_GRANTED_PERMISSIONS.has(permission) && isAllowedNavigationUrl(requestingUrl));
+  });
 }
 
 function normalizeSourcePath(value) {
@@ -789,11 +948,17 @@ function normalizeSourcePath(value) {
     throw new Error("Source path must be a string.");
   }
 
-  const normalized = path.resolve(value.trim());
-  if (!normalized) {
+  // path.resolve("") devuelve el cwd del proceso: validar antes de resolver o
+  // una ruta vacia (o relativa) termina apuntando a la carpeta de la app.
+  const trimmed = value.trim();
+  if (!trimmed) {
     throw new Error("Source path cannot be empty.");
   }
+  if (!path.isAbsolute(trimmed)) {
+    throw new Error(`Source path must be absolute: ${trimmed}`);
+  }
 
+  const normalized = path.resolve(trimmed);
   if (!fs.existsSync(normalized) || !fs.statSync(normalized).isDirectory()) {
     throw new Error(`Configured source folder does not exist: ${normalized}`);
   }
@@ -821,13 +986,19 @@ function setConfigurationValue(configKey, configValue) {
 function sanitizePlayerPreviewPhotos(inputPhotos) {
   return (Array.isArray(inputPhotos) ? inputPhotos : [])
     .filter((photo) => photo && typeof photo === "object")
-    .map((photo) => ({
-      photoPath: String(photo.photoPath || ""),
-      url: String(photo.url || ""),
-      similarity: Number.isFinite(Number(photo.similarity)) ? Number(photo.similarity) : null,
-      displayNumber: Number.isFinite(Number(photo.displayNumber)) ? Number(photo.displayNumber) : null
-    }))
-    .filter((photo) => photo.photoPath && photo.url);
+    .map((photo) => {
+      const photoPath = String(photo.photoPath || "");
+      return {
+        photoPath,
+        // Las URLs las arma main a partir de photoPath: el renderer no elige a que apunta
+        // el jugador. thumbUrl es la miniatura de la grilla; url, la foto completa.
+        url: photoPath ? getSourcePhotoUrl(photoPath) : "",
+        thumbUrl: photoPath ? getSourceThumbnailUrl(photoPath) : "",
+        similarity: Number.isFinite(Number(photo.similarity)) ? Number(photo.similarity) : null,
+        displayNumber: Number.isFinite(Number(photo.displayNumber)) ? Number(photo.displayNumber) : null
+      };
+    })
+    .filter((photo) => photo.photoPath);
 }
 
 function sanitizePlayerPreviewPayload(payload, fallbackUpdatedAt = null) {
@@ -899,7 +1070,9 @@ function getThumbnailCacheDir() {
 
 function getThumbnailCachePath(photoPath, stats) {
   const hash = createHash("sha1")
-    .update(`${photoPath}|${String(stats.mtimeNs || stats.mtimeMs)}|${String(stats.size)}`)
+    .update(
+      `${photoPath}|${String(stats.mtimeNs || stats.mtimeMs)}|${String(stats.size)}|${THUMBNAIL_SIZE_PX}`
+    )
     .digest("hex");
   return path.join(getThumbnailCacheDir(), hash.slice(0, 2), `${hash}.jpg`);
 }
@@ -952,6 +1125,54 @@ function registerSourcePhotoProtocol() {
   });
 }
 
+// Borra las miniaturas mas viejas (por fecha de escritura) cuando el cache pasa el tope.
+async function pruneThumbnailCache() {
+  const entries = [];
+  let totalBytes = 0;
+
+  const walk = async (directory) => {
+    let items = [];
+    try {
+      items = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      const fullPath = path.join(directory, item.name);
+      if (item.isDirectory()) {
+        await walk(fullPath);
+      } else if (item.isFile()) {
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          entries.push({ fullPath, size: stats.size, mtimeMs: stats.mtimeMs });
+          totalBytes += stats.size;
+        } catch {
+          // Archivo borrado mientras se recorria.
+        }
+      }
+    }
+  };
+
+  await walk(getThumbnailCacheDir());
+  if (totalBytes <= THUMBNAIL_CACHE_MAX_BYTES) {
+    return;
+  }
+
+  const targetBytes = THUMBNAIL_CACHE_MAX_BYTES * 0.8;
+  entries.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  for (const entry of entries) {
+    if (totalBytes <= targetBytes) {
+      break;
+    }
+    try {
+      await fs.promises.rm(entry.fullPath, { force: true });
+      totalBytes -= entry.size;
+    } catch {
+      // Si no se puede borrar, se sigue con la siguiente.
+    }
+  }
+}
+
 async function getOrCreateThumbnail(realPhotoPath, stats) {
   const thumbnailStats = {
     mtimeNs: Number.isFinite(Number(stats.mtimeNs)) ? Number(stats.mtimeNs) : null,
@@ -975,13 +1196,25 @@ async function getOrCreateThumbnail(realPhotoPath, stats) {
     }
 
     await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
-    const thumbnail = await nativeImage.createThumbnailFromPath(realPhotoPath, { width: 256, height: 256 });
+    const thumbnail = await nativeImage.createThumbnailFromPath(realPhotoPath, {
+      width: THUMBNAIL_SIZE_PX,
+      height: THUMBNAIL_SIZE_PX
+    });
     if (!thumbnail || thumbnail.isEmpty()) {
       return null;
     }
 
-    const jpeg = thumbnail.toJPEG(78);
+    const jpeg = thumbnail.toJPEG(82);
     await fs.promises.writeFile(cachePath, jpeg);
+    thumbnailWritesSincePrune += 1;
+    if (thumbnailWritesSincePrune >= THUMBNAIL_CACHE_PRUNE_EVERY_WRITES && !thumbnailPrunePromise) {
+      thumbnailWritesSincePrune = 0;
+      thumbnailPrunePromise = pruneThumbnailCache()
+        .catch((error) => console.warn("[main] Thumbnail cache prune failed:", error))
+        .finally(() => {
+          thumbnailPrunePromise = null;
+        });
+    }
     return cachePath;
   })();
 
@@ -1164,8 +1397,29 @@ function createEmptyPhotoIndexSummary() {
   };
 }
 
+// Las claves van normalizadas (path.resolve + minusculas): la letra de unidad o el
+// casing de la carpeta pueden diferir entre lo que escribio Python y lo que listo el disco.
 function mapPhotoIndexStatusRowsByPath(rows) {
-  return new Map(rows.map((row) => [row.absolute_path, row]));
+  return new Map(rows.map((row) => [normalizeComparablePath(row.absolute_path), row]));
+}
+
+function getStatusForPhoto(statusByPath, photo) {
+  return statusByPath.get(normalizeComparablePath(photo.path));
+}
+
+function loadPhotoIndexStatusRowsBySourceCached(sourcePath) {
+  const normalizedSourcePath = normalizeSourcePath(sourcePath);
+  const sourceKey = normalizeComparablePath(normalizedSourcePath);
+  if (
+    photoIndexStatusRowsCache.version === photoIndexStatusVersion &&
+    photoIndexStatusRowsCache.sourceKey === sourceKey
+  ) {
+    return photoIndexStatusRowsCache.rows;
+  }
+
+  const rows = loadPhotoIndexStatusRowsBySource(normalizedSourcePath);
+  photoIndexStatusRowsCache = { version: photoIndexStatusVersion, sourceKey, rows };
+  return rows;
 }
 
 function loadPhotoIndexStatusRowsBySource(sourcePath) {
@@ -1187,7 +1441,9 @@ function loadPhotoIndexStatusRowsByPhotos(sourcePath, photos) {
   }
 
   const normalizedSourcePath = normalizeSourcePath(sourcePath);
-  const uniquePaths = [...new Set(photos.map((photo) => photo.path).filter(Boolean))];
+  // Comparacion sin distincion de mayusculas: lower() de SQLite solo pliega ASCII, y
+  // el resultado se vuelve a comparar en JS con normalizeComparablePath.
+  const uniquePaths = [...new Set(photos.map((photo) => normalizeComparablePath(photo.path)).filter(Boolean))];
   const rows = [];
 
   for (let index = 0; index < uniquePaths.length; index += SQLITE_BIND_CHUNK_SIZE) {
@@ -1200,7 +1456,7 @@ function loadPhotoIndexStatusRowsByPhotos(sourcePath, photos) {
             SELECT absolute_path, indexed_status, last_indexed_at, last_error
             FROM ${PHOTO_INDEX_STATUS_TABLE}
             WHERE source_path = ?
-              AND absolute_path IN (${placeholders})
+              AND lower(absolute_path) IN (${placeholders})
           `
         )
         .all(normalizedSourcePath, ...chunk)
@@ -1222,7 +1478,7 @@ function collectPhotoStatusMatches(photos, statusByPath, statusFilter) {
   const matchingPhotos = [];
 
   for (const photo of photos) {
-    const status = getPhotoFilterStatusFromIndexRow(statusByPath.get(photo.path));
+    const status = getPhotoFilterStatusFromIndexRow(getStatusForPhoto(statusByPath, photo));
     counts[status] += 1;
     if (statusFilter === "all" || status === statusFilter) {
       matchingPhotos.push(photo);
@@ -1247,7 +1503,7 @@ function addIndexStatusToPhotos(photos, statusByPath = null) {
   }
 
   if (statusByPath) {
-    return photos.map((photo) => addIndexStatusToPhoto(photo, statusByPath.get(photo.path)));
+    return photos.map((photo) => addIndexStatusToPhoto(photo, getStatusForPhoto(statusByPath, photo)));
   }
 
   const placeholders = photos.map(() => "?").join(", ");
@@ -1256,13 +1512,13 @@ function addIndexStatusToPhotos(photos, statusByPath = null) {
       `
         SELECT absolute_path, indexed_status, last_indexed_at, last_error
         FROM ${PHOTO_INDEX_STATUS_TABLE}
-        WHERE absolute_path IN (${placeholders})
+        WHERE lower(absolute_path) IN (${placeholders})
       `
     )
-    .all(...photos.map((photo) => photo.path));
-  const loadedStatusByPath = new Map(rows.map((row) => [row.absolute_path, row]));
+    .all(...photos.map((photo) => normalizeComparablePath(photo.path)));
+  const loadedStatusByPath = mapPhotoIndexStatusRowsByPath(rows);
 
-  return photos.map((photo) => addIndexStatusToPhoto(photo, loadedStatusByPath.get(photo.path)));
+  return photos.map((photo) => addIndexStatusToPhoto(photo, getStatusForPhoto(loadedStatusByPath, photo)));
 }
 
 async function readImageFilesFromSourcePath(sourcePath) {
@@ -1321,8 +1577,13 @@ async function getCachedSourcePhotos(sourcePath, { refresh = false } = {}) {
     return photoListCache.photos;
   }
 
+  // Si hubo una invalidacion mientras se listaba (un cambio en la carpeta), este
+  // listado puede ser anterior al cambio: se devuelve pero no se cachea.
+  const generationAtStart = photoListCacheGeneration;
   const photos = await readImageFilesFromSourcePath(sourceRoot);
-  photoListCache = { sourcePath: sourceRoot, loadedAt: now, photos };
+  if (generationAtStart === photoListCacheGeneration) {
+    photoListCache = { sourcePath: sourceRoot, loadedAt: now, photos };
+  }
   return photos;
 }
 
@@ -1350,7 +1611,7 @@ async function listImageFilesFromSourcePath(sourcePath, options = {}) {
     : photos;
   const statusRows = query
     ? loadPhotoIndexStatusRowsByPhotos(sourcePath, queriedPhotos)
-    : loadPhotoIndexStatusRowsBySource(sourcePath);
+    : loadPhotoIndexStatusRowsBySourceCached(sourcePath);
   const statusByPath = mapPhotoIndexStatusRowsByPath(statusRows);
   const { matchingPhotos, statusCounts } = collectPhotoStatusMatches(queriedPhotos, statusByPath, statusFilter);
   const total = matchingPhotos.length;
@@ -1386,6 +1647,7 @@ function clearFaceIndex() {
   } else {
     db.prepare(`DELETE FROM ${PHOTO_INDEX_STATUS_TABLE}`).run();
   }
+  invalidatePhotoIndexStatusCache();
 
   playerPreviewPayload = { photos: [], updatedAt: Date.now() };
   persistPlayerPreviewPayload(playerPreviewPayload);
@@ -1400,6 +1662,47 @@ function clearFaceIndex() {
     sourcePath,
     updatedAt: Date.now()
   };
+}
+
+// Campos de `data` que el renderer puede mandar a cada accion de Python.
+const PYTHON_ACTION_DATA_FIELDS = {
+  ping: [],
+  index_photos: ["forceReindex"],
+  find_player: ["frames", "similarityThreshold", "maxResults", "queryExpansion"]
+};
+
+function pickPythonActionData(action, data) {
+  const source = data && typeof data === "object" ? data : {};
+  const picked = {};
+  for (const field of PYTHON_ACTION_DATA_FIELDS[action] || []) {
+    if (source[field] !== undefined) {
+      picked[field] = source[field];
+    }
+  }
+  return picked;
+}
+
+// Solo se devuelven coincidencias cuyo archivo existe y esta dentro de la carpeta
+// configurada (realpath, para que un symlink no saque la foto de la carpeta).
+async function keepMatchesInsideSourceFolder(matches, sourcePath) {
+  const realSourceRoot = await fs.promises.realpath(sourcePath);
+  const checks = await Promise.all(
+    matches.map(async (match) => {
+      const photoPath = typeof match?.photoPath === "string" ? match.photoPath : "";
+      if (!photoPath || !SOURCE_IMAGE_EXTENSIONS.has(path.extname(photoPath).toLowerCase())) {
+        return false;
+      }
+      try {
+        const realPhotoPath = await fs.promises.realpath(path.resolve(photoPath));
+        const stats = await fs.promises.stat(realPhotoPath);
+        return stats.isFile() && isPathInsideDirectory(realPhotoPath, realSourceRoot);
+      } catch {
+        return false;
+      }
+    })
+  );
+  const keptMatches = matches.filter((_match, index) => checks[index]);
+  return { matches: keptMatches, dropped: matches.length - keptMatches.length };
 }
 
 function registerIpc() {
@@ -1522,7 +1825,12 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle("index:clear", async () => clearFaceIndex());
+  ipcMain.handle("index:clear", async () => {
+    if (photoIndexPipelineBusy) {
+      throw new Error("Hay un indexado en curso; esperá a que termine para limpiar el índice.");
+    }
+    return clearFaceIndex();
+  });
 
   ipcMain.handle("photos:open-external", async (_event, payload) => {
     const photoPath = typeof payload?.path === "string" ? payload.path : "";
@@ -1615,16 +1923,22 @@ function registerIpc() {
       throw new Error(`Unsupported Python action: ${String(action)}`);
     }
 
-    const appDataPath = app.getPath("userData");
-    let sourcePath = data?.sourcePath || null;
-    if (action === "index_photos") {
-      sourcePath = sourcePath
-        ? normalizeSourcePath(sourcePath)
-        : getSourcePathFromConfiguration({ required: true });
+    // Solo se envian los campos que cada accion acepta. El sourcePath nunca viene del
+    // renderer sin validar: si llega, tiene que ser la carpeta configurada.
+    const requestedData = pickPythonActionData(action, data);
+    let sourcePath = null;
+    if (action !== "ping") {
+      sourcePath = getSourcePathFromConfiguration({ required: true });
+      if (data?.sourcePath !== undefined && data?.sourcePath !== null) {
+        const requestedSourcePath = normalizeSourcePath(data.sourcePath);
+        if (normalizeComparablePath(requestedSourcePath) !== normalizeComparablePath(sourcePath)) {
+          throw new Error("La carpeta pedida no es la carpeta configurada para las fotos.");
+        }
+      }
     }
 
     const runtimeData = {
-      appDataPath,
+      appDataPath: app.getPath("userData"),
       indexDir: getFaceIndexDir()
     };
 
@@ -1641,25 +1955,43 @@ function registerIpc() {
     }
 
     const mergedData = {
-      ...(data || {}),
+      ...requestedData,
       ...extra,
       ...(sourcePath ? { sourcePath } : {}),
-      __runtime: {
-        ...((data && data.__runtime) || {}),
-        ...runtimeData
-      }
+      __runtime: runtimeData
     };
+
+    if (action === "find_player") {
+      const response = await pythonBridge.sendToPython(action, mergedData);
+      const matches = response?.result?.matches;
+      if (!Array.isArray(matches)) {
+        return response;
+      }
+      // Python puede devolver fotos que se movieron o borraron desde el ultimo indexado,
+      // o que quedaron fuera de la carpeta configurada: no se muestran.
+      const { matches: keptMatches, dropped } = await keepMatchesInsideSourceFolder(matches, sourcePath);
+      if (dropped > 0) {
+        console.warn(`[main] find_player: descartadas ${dropped} coincidencias fuera de la carpeta o inexistentes.`);
+      }
+      return { ...response, result: { ...response.result, matches: keptMatches } };
+    }
 
     if (action !== "index_photos") {
       return pythonBridge.sendToPython(action, mergedData);
     }
 
+    // Un solo indexado a la vez: el segundo se rechaza en vez de encolarse en Python.
+    if (photoIndexPipelineBusy) {
+      throw new Error("Ya hay un indexado en curso; esperá a que termine antes de iniciar otro.");
+    }
+    photoIndexPipelineBusy = true;
     try {
       return await pythonBridge.sendToPython(action, mergedData);
     } finally {
       // Sincronizar tambien si la corrida fallo o dio timeout: Python guarda
       // checkpoints del manifest durante la corrida, y sin esto la lista de
-      // fotos seguia mostrando el estado anterior.
+      // fotos seguia mostrando el estado anterior. El flag se libera al final,
+      // despues de la sincronizacion, para que no se limpie a mitad de camino.
       const manifestPath = path.join(getFaceIndexDir(), "photos_manifest.json");
       try {
         if (fs.existsSync(manifestPath)) {
@@ -1667,8 +1999,10 @@ function registerIpc() {
         }
       } catch (syncError) {
         console.error("[main] Could not sync photo index status from manifest:", syncError);
+      } finally {
+        clearPhotoListCache(sourcePath);
+        photoIndexPipelineBusy = false;
       }
-      clearPhotoListCache(sourcePath);
     }
   });
 }
@@ -1699,17 +2033,36 @@ process.on("unhandledRejection", (reason) => {
   console.error("[main] Unhandled promise rejection:", reason);
 });
 
+// Una segunda instancia no debe abrir otra base, otro Python ni otras ventanas:
+// sale, y la primera trae la ventana del operador al frente.
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    focusOperatorWindow();
+  });
+}
+
 app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) {
+    return;
+  }
+
   try {
     app.setAppUserModelId("com.lifibav3.desktop");
     registerSourcePhotoProtocol();
     registerSourceThumbnailProtocol();
+    configureSessionPermissions();
     createDatabase();
     loadPlayerPreviewPayloadFromConfiguration();
     pythonBridge = createPythonBridge();
     pythonBridge.start();
     registerIpc();
     createAppWindows();
+    screen.on("display-added", relocateOffscreenWindows);
+    screen.on("display-removed", relocateOffscreenWindows);
+    screen.on("display-metrics-changed", relocateOffscreenWindows);
     startSourcepadWatcherFromConfiguration();
   } catch (error) {
     handleFatalStartupError(error);
