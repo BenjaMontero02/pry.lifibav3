@@ -46,10 +46,14 @@ const browserDesktopApi = {
       return { canceled: true, value: null };
     }
     if (channel === "config:get-index-settings") {
-      return { faceSizePx: 28, faceDetScore: 0.50 };
+      return { faceSizePx: 28, faceDetScore: 0.50, minFaceQuality: 0, indexQuality: null };
     }
     if (channel === "config:set-index-settings") {
-      return { faceSizePx: payload?.faceSizePx ?? 28, faceDetScore: payload?.faceDetScore ?? 0.50 };
+      return {
+        faceSizePx: payload?.faceSizePx ?? 28,
+        faceDetScore: payload?.faceDetScore ?? 0.50,
+        minFaceQuality: payload?.minFaceQuality ?? 0
+      };
     }
     if (channel === "config:list-source-photos") {
       return {

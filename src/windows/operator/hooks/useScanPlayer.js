@@ -46,6 +46,27 @@ function saveScanSettings(settings) {
   }
 }
 
+// Texto extra del estado del escaneo sobre el filtro de calidad: cuantas caras se
+// ocultaron y, si el indice no tiene calidad en todas sus caras, que hay que reindexar.
+function describeQualityFilter(search) {
+  const hidden = Number(search?.facesFilteredByQuality || 0);
+  const minQuality = Number(search?.minFaceQuality || 0);
+  const indexSize = Number(search?.indexSize || 0);
+  const withQuality = Number(search?.facesWithQuality || 0);
+  if (minQuality <= 0) {
+    return "";
+  }
+  if (search?.qualityAvailable === false) {
+    return " El filtro de calidad necesita el modelo AdaFace; con el modelo de respaldo no oculta nada.";
+  }
+  const hiddenText = hidden > 0 ? ` Se ocultaron ${hidden} caras de baja calidad.` : "";
+  const reindexText =
+    withQuality < indexSize
+      ? " El indice no tiene calidad guardada en todas las caras: usa 'Reindexar todo' en Fotos para que el filtro aplique."
+      : "";
+  return `${hiddenText}${reindexText}`;
+}
+
 function delay(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -332,7 +353,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       if (result.status === "no_matches_above_threshold") {
         setScanStatus({
           type: "error",
-          message: "No se encontraron fotos con suficiente similitud. Proba bajando el umbral de coincidencia."
+          message: `No se encontraron fotos con suficiente similitud. Proba bajando el umbral de coincidencia.${describeQualityFilter(result.search)}`
         });
         return;
       }
@@ -365,7 +386,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
           : "";
       setScanStatus({
         type: "success",
-        message: `Se encontraron ${matches.length} fotos.${moreText}${rejectedText}`
+        message: `Se encontraron ${matches.length} fotos.${moreText}${rejectedText}${describeQualityFilter(result.search)}`
       });
     } catch (error) {
       if (abortController.signal.aborted) {

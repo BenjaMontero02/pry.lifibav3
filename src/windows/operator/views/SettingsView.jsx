@@ -12,11 +12,14 @@ export default function SettingsView({
   onSave,
   faceSizePx,
   faceDetScore,
+  minFaceQuality,
+  indexQuality,
   indexLoading,
   indexSaving,
   indexStatus,
   onFaceSizePxChange,
   onFaceDetScoreChange,
+  onMinFaceQualityChange,
   onIndexSettingsSave
 }) {
   return (
@@ -112,6 +115,46 @@ export default function SettingsView({
             <span>0.05 (menos preciso)</span>
             <span>0.99 (mas preciso)</span>
           </div>
+
+          <label className="field-label" htmlFor="min-face-quality-slider">
+            Calidad minima de rostro en resultados ({minFaceQuality > 0 ? minFaceQuality.toFixed(1) : "desactivada"})
+          </label>
+          <input
+            id="min-face-quality-slider"
+            className="settings-slider"
+            type="range"
+            min="0"
+            max="30"
+            step="0.5"
+            value={minFaceQuality}
+            onChange={(event) => onMinFaceQualityChange(Number(event.target.value))}
+          />
+          <div className="slider-labels">
+            <span>0 (no filtra)</span>
+            <span>30 (muy estricto)</span>
+          </div>
+          <p className="meta">
+            Oculta en la busqueda las caras borrosas, oscuras o cortadas. Con 0 no se oculta ninguna.
+            El valor de corte no esta calibrado con fotos de un evento: sube de a poco y revisa los resultados.
+          </p>
+          {minFaceQuality > 0 && indexQuality?.qualityBackend === false ? (
+            <p className="meta">
+              El indice se armo sin el modelo AdaFace, que es el que mide la calidad: el filtro no oculta nada hasta
+              que se reindexe con AdaFace.
+            </p>
+          ) : null}
+          {minFaceQuality > 0 && indexQuality?.qualityBackend === true && indexQuality.withQuality < indexQuality.faces ? (
+            <p className="meta">
+              Hay {indexQuality.faces - indexQuality.withQuality} caras indexadas sin calidad guardada (indice anterior a
+              esta version): el filtro no las oculta. Usa "Reindexar todo" en Fotos para que se aplique a todo el catalogo.
+            </p>
+          ) : null}
+          {minFaceQuality > 0 && indexQuality?.qualityBackend === true && indexQuality.unknown ? (
+            <p className="meta">
+              El indice es anterior a esta version y no guarda la calidad de las caras: el filtro no oculta nada. Usa
+              "Reindexar todo" en Fotos para que se aplique.
+            </p>
+          ) : null}
 
           <div className="actions">
             <button

@@ -355,8 +355,11 @@ def _insightface_embedding(image_bgr, face):
     return normalize_embedding(features[0] + features[1])
 
 
-def extract_face_embedding(image_bgr, face):
-    """Embedding L2-normalizado de una cara detectada, segun el backend activo.
+def extract_face_embedding_with_quality(image_bgr, face):
+    """``(embedding, quality)`` de una cara detectada, segun el backend activo.
+
+    ``quality`` es la norma del feature AdaFace (proxy de calidad, mas alto =
+    mejor). El backend InsightFace no la tiene: devuelve None.
 
     Unica puerta de entrada para indexado y busqueda: garantiza que ambos
     usan el mismo modelo (embeddings de modelos distintos no son comparables).
@@ -365,5 +368,16 @@ def extract_face_embedding(image_bgr, face):
     if get_embedding_backend() == "adaface":
         from app.services import adaface_service
 
-        return adaface_service.compute_embedding(image_bgr, face)
-    return _insightface_embedding(image_bgr, face)
+        return adaface_service.compute_embedding_with_quality(image_bgr, face)
+    return _insightface_embedding(image_bgr, face), None
+
+
+def embedding_provides_quality():
+    """True cuando el backend activo entrega calidad (norma AdaFace). InsightFace no."""
+    return get_embedding_backend() == "adaface"
+
+
+def extract_face_embedding(image_bgr, face):
+    """Embedding L2-normalizado de una cara detectada (ver extract_face_embedding_with_quality)."""
+    embedding, _quality = extract_face_embedding_with_quality(image_bgr, face)
+    return embedding

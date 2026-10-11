@@ -26,7 +26,7 @@ export default function App() {
   const initialViewResolvedRef = useRef(false);
 
   const sourceConfig = useSourcePathConfig(desktopApi);
-  const indexSettings = useIndexSettings(desktopApi);
+  const indexSettings = useIndexSettings(desktopApi, activeView);
   const scan = useScanPlayer({ desktopApi, activeView });
   const diagnostics = useDiagnostics({ desktopApi, activeView });
   const photos = usePhotos({
@@ -83,11 +83,14 @@ export default function App() {
               onSave={sourceConfig.handleSave}
               faceSizePx={indexSettings.faceSizePx}
               faceDetScore={indexSettings.faceDetScore}
+              minFaceQuality={indexSettings.minFaceQuality}
+              indexQuality={indexSettings.indexQuality}
               indexLoading={indexSettings.loading}
               indexSaving={indexSettings.saving}
               indexStatus={indexSettings.status}
               onFaceSizePxChange={indexSettings.setFaceSizePx}
               onFaceDetScoreChange={indexSettings.setFaceDetScore}
+              onMinFaceQualityChange={indexSettings.setMinFaceQuality}
               onIndexSettingsSave={indexSettings.handleSave}
             />
           ) : activeView === "photos" ? (

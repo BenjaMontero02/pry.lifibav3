@@ -9,7 +9,8 @@ import numpy as np
 
 from app.services.face_index_service import (
     detect_faces,
-    extract_face_embedding,
+    embedding_provides_quality,
+    extract_face_embedding_with_quality,
     face_size_px,
     get_face_model_name,
     load_index,
@@ -43,6 +44,13 @@ QUERY_FRAME_CONSISTENCY_MIN = 0.35
 QUERY_EXPANSION_MIN_SIMILARITY = 0.6
 QUERY_EXPANSION_MARGIN = 0.15
 QUERY_EXPANSION_MAX_NEIGHBORS = 5
+
+# Calidad de cara (norma del feature AdaFace, mas alto = mejor). 0 = filtro apagado.
+# Sin calibrar con fotos reales del evento: la norma solo separa bien el blur
+# fuerte. Se ajusta desde Ajustes ("Calidad minima de rostro en resultados").
+DEFAULT_MIN_FACE_QUALITY = 0.0
+# Piso del peso de un frame en el promedio de la consulta (evita pesos en cero).
+QUERY_WEIGHT_FLOOR = 1e-6
 
 _artifact_cache = {
     "index_path": None,
@@ -205,46 +213,65 @@ def _resolve_frames(data):
     return frames
 
 
-def _consistent_embeddings(embeddings):
-    """Keep the frames that agree with the medoid (the frame most similar to
-    the rest). Drops frames where a different person ended up as the main face."""
+def _consistent_positions(embeddings):
+    """Posiciones de los frames que concuerdan con el medoide (el frame mas
+    parecido al resto). Descarta frames donde otra persona quedo como cara principal.
+    Devuelve ``(posiciones_que_se_quedan, cantidad_descartada)``."""
     if len(embeddings) <= 1:
-        return embeddings, 0
+        return list(range(len(embeddings))), 0
 
     stacked = np.stack(embeddings, axis=0)
     similarity = stacked @ stacked.T
     medoid = int(np.argmax(similarity.sum(axis=1)))
     kept = [
-        embedding
-        for position, embedding in enumerate(embeddings)
+        position
+        for position in range(len(embeddings))
         if position == medoid or similarity[medoid, position] >= QUERY_FRAME_CONSISTENCY_MIN
     ]
     return kept, len(embeddings) - len(kept)
 
 
+def _query_weights(qualities):
+    """Peso de cada frame en el promedio: su calidad si todos la tienen; si no, igual peso
+    (mezclar normas con y sin calidad no es comparable)."""
+    if qualities and all(quality is not None for quality in qualities):
+        return [max(float(quality), QUERY_WEIGHT_FLOOR) for quality in qualities]
+    return [1.0] * len(qualities)
+
+
 def _average_query_embedding(frames_b64):
-    """Compute embeddings per frame and return the L2-normalized average.
+    """Compute embeddings per frame and return the quality-weighted, L2-normalized average.
 
     Frames without a detectable face are skipped (not an error), and so are
-    frames inconsistent with the others. Returns a tuple
-    (embedding_or_none, frames_used, frames_total, frames_rejected).
+    frames inconsistent with the others. Each kept frame weighs by its AdaFace
+    quality, so blurry or dark frames pull the query less. Returns a tuple
+    (embedding_or_none, frames_used, frames_total, frames_rejected, frame_qualities),
+    where ``frame_qualities`` has one entry per frame with a face (None = unknown).
     Re-normalizing the average is critical: the FAISS index uses inner product,
     which only equals cosine similarity for unit-norm vectors.
     """
     embeddings = []
+    qualities = []
     for frame_b64 in frames_b64:
         image = _decode_frame_image(frame_b64)
-        embedding = _primary_face_embedding(image)
+        embedding, quality = _primary_face_embedding(image)
         if embedding is not None:
             embeddings.append(embedding)
+            qualities.append(quality)
 
     if not embeddings:
-        return None, 0, len(frames_b64), 0
+        return None, 0, len(frames_b64), 0, qualities
 
-    kept, rejected = _consistent_embeddings(embeddings)
-    averaged = np.mean(np.stack(kept, axis=0), axis=0)
+    kept_positions, rejected = _consistent_positions(embeddings)
+    kept_embeddings = [embeddings[position] for position in kept_positions]
+    kept_qualities = [qualities[position] for position in kept_positions]
+    averaged = np.average(
+        np.stack(kept_embeddings, axis=0),
+        axis=0,
+        weights=_query_weights(kept_qualities),
+    )
     normalized = normalize_embedding(averaged)
-    return normalized, len(kept), len(frames_b64), rejected
+    return normalized, len(kept_positions), len(frames_b64), rejected, qualities
 
 
 def _resolve_threshold(data):
@@ -261,6 +288,37 @@ def _resolve_threshold(data):
     if threshold_value < -1.0 or threshold_value > 1.0:
         raise ValueError("similarityThreshold must be in range [-1.0, 1.0].")
     return threshold_value
+
+
+def _resolve_min_face_quality(data):
+    """Calidad minima (norma AdaFace) para una cara del catalogo. 0 o ausente = apagado."""
+    raw_quality = (data or {}).get("minFaceQuality", DEFAULT_MIN_FACE_QUALITY)
+    if raw_quality is None:
+        return DEFAULT_MIN_FACE_QUALITY
+    if isinstance(raw_quality, bool):
+        raise ValueError("minFaceQuality must be a finite number.")
+    try:
+        quality_value = float(raw_quality)
+    except (TypeError, ValueError) as error:
+        raise ValueError("minFaceQuality must be a finite number.") from error
+    if not math.isfinite(quality_value) or quality_value < 0.0:
+        raise ValueError("minFaceQuality must be a finite number greater than or equal to zero.")
+    return quality_value
+
+
+def _row_quality(vector_row):
+    """Calidad guardada en una fila de vectors.json, o None si no la tiene (indice viejo)."""
+    value = vector_row.get("quality")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _count_faces_with_quality(vectors):
+    return sum(
+        1 for vector_row in vectors if isinstance(vector_row, dict) and _row_quality(vector_row) is not None
+    )
 
 
 def _resolve_max_results(data):
@@ -291,7 +349,7 @@ def _resolve_max_results(data):
 
 
 def _primary_face_embedding(image):
-    """Embedding of the player's face in a webcam frame.
+    """``(embedding, quality)`` of the player's face in a webcam frame, or ``(None, None)``.
 
     The player stands in front of the camera, so the main face is the biggest
     one (weighted by detection confidence). Picking by confidence alone let a
@@ -307,14 +365,20 @@ def _primary_face_embedding(image):
         reverse=True,
     )
     for face in faces:
-        embedding = extract_face_embedding(image, face)
+        embedding, quality = extract_face_embedding_with_quality(image, face)
         if embedding is not None:
-            return embedding
-    return None
+            return embedding, quality
+    return None, None
 
 
-def _unique_matches(indices, distances, vectors_by_id, threshold, limit):
+def _unique_matches(indices, distances, vectors_by_id, threshold, limit, min_quality=None):
+    """Mejor cara por foto. Devuelve ``(coincidencias, caras_filtradas_por_calidad)``.
+
+    Las caras con calidad conocida menor que ``min_quality`` se descartan antes de
+    agregar por foto: una foto solo sale si tiene otra cara que pase el filtro.
+    """
     matches_by_photo = {}
+    filtered_by_quality = 0
     for index_position, vector_id in enumerate(indices):
         if vector_id < 0:
             continue
@@ -331,6 +395,11 @@ def _unique_matches(indices, distances, vectors_by_id, threshold, limit):
         if not photo_path:
             continue
 
+        quality = _row_quality(vector_row)
+        if min_quality is not None and quality is not None and quality < min_quality:
+            filtered_by_quality += 1
+            continue
+
         current = matches_by_photo.get(photo_path)
         if current is None or similarity > current["similarity"]:
             try:
@@ -343,10 +412,11 @@ def _unique_matches(indices, distances, vectors_by_id, threshold, limit):
                 "similarity": similarity,
                 "faceOrdinal": face_ordinal,
                 "faceId": int(vector_id),
+                "quality": quality,
             }
 
     ordered = sorted(matches_by_photo.values(), key=lambda row: row["similarity"], reverse=True)
-    return ordered[:limit]
+    return ordered[:limit], filtered_by_quality
 
 
 def _count_unique_photos(vectors):
@@ -372,7 +442,9 @@ def _resolve_search_limit(index_total, max_results, unique_photo_count):
     return min(index_total, requested_window, MAX_SEARCH_CANDIDATES)
 
 
-def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_results):
+def _search_unique_matches(
+    index, query, vectors, vectors_by_id, threshold, max_results, min_quality=None
+):
     unique_photo_count = _count_unique_photos(vectors)
     result_limit = min(max_results, unique_photo_count)
     search_limit = _resolve_search_limit(index.ntotal, max_results, unique_photo_count)
@@ -384,6 +456,7 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
             "uniquePhotos": unique_photo_count,
             "stopReason": "no_indexed_photos",
             "topSimilarities": [],
+            "facesFilteredByQuality": 0,
         }
 
     search_size = min(
@@ -392,22 +465,21 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
     )
     matches = []
     top_similarities = []
+    filtered_by_quality = 0
     stop_reason = "search_limit_reached"
 
     while search_size > 0:
         distances, indices = index.search(query, search_size)
         indices_row = indices[0]
         distances_row = distances[0]
-        matches = _unique_matches(
-            indices_row, distances_row, vectors_by_id, threshold, result_limit
+        matches, filtered_by_quality = _unique_matches(
+            indices_row, distances_row, vectors_by_id, threshold, result_limit, min_quality
         )
-        # Mejores similitudes sin filtrar por umbral: para calibrar, no para mostrar.
-        top_similarities = [
-            round(row["similarity"], 4)
-            for row in _unique_matches(
-                indices_row, distances_row, vectors_by_id, -1.0, TOP_SIMILARITY_LOG_LIMIT
-            )
-        ]
+        # Mejores similitudes sin filtrar por umbral ni calidad: para calibrar, no para mostrar.
+        top_rows, _unused_filtered = _unique_matches(
+            indices_row, distances_row, vectors_by_id, -1.0, TOP_SIMILARITY_LOG_LIMIT
+        )
+        top_similarities = [round(row["similarity"], 4) for row in top_rows]
         valid_distances = [
             float(distance)
             for vector_id, distance in zip(indices_row, distances_row)
@@ -435,6 +507,7 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
         "uniquePhotos": int(unique_photo_count),
         "stopReason": stop_reason,
         "topSimilarities": top_similarities,
+        "facesFilteredByQuality": int(filtered_by_quality),
     }
 
 
@@ -465,17 +538,33 @@ def _merge_expanded_matches(matches, expanded_matches, limit):
     return ordered[:limit]
 
 
-def _log_match_calibration(threshold, search_summary, matches_count, frames_used, frames_total):
-    """Una linea con las mejores similitudes, aunque no superen el umbral."""
+def _log_match_calibration(
+    threshold,
+    search_summary,
+    matches_count,
+    frames_used,
+    frames_total,
+    frame_qualities,
+    min_face_quality,
+):
+    """Una linea con las mejores similitudes, aunque no superen el umbral, y las
+    calidades de los frames de la webcam."""
     top = ",".join("{:.4f}".format(value) for value in search_summary.get("topSimilarities", []))
+    qualities = ",".join(
+        "-" if quality is None else "{:.2f}".format(quality) for quality in frame_qualities
+    )
     sys.stderr.write(
         "[face-calibration] find_player umbral={thr:.2f} top=[{top}] "
-        "coincidencias={count} frames={used}/{total}\n".format(
+        "coincidencias={count} frames={used}/{total} calidadFrames=[{qualities}] "
+        "minCalidad={min_quality:.2f} filtradasCalidad={filtered}\n".format(
             thr=threshold,
             top=top,
             count=matches_count,
             used=frames_used,
             total=frames_total,
+            qualities=qualities,
+            min_quality=min_face_quality,
+            filtered=search_summary.get("facesFilteredByQuality", 0),
         )
     )
 
@@ -484,6 +573,9 @@ def find_player(data, _request_id):
     data = data or {}
     threshold = _resolve_threshold(data)
     max_results = _resolve_max_results(data)
+    min_face_quality = _resolve_min_face_quality(data)
+    # None = filtro apagado (0 o ausente): las filas sin calidad nunca se filtran.
+    quality_filter = min_face_quality if min_face_quality > 0 else None
     use_query_expansion = bool(data.get("queryExpansion", False))
 
     index_dir = resolve_index_dir(data, "find_player")
@@ -534,9 +626,13 @@ def find_player(data, _request_id):
         )
 
     frames_b64 = _resolve_frames(data)
-    query_embedding, frames_used, frames_total, frames_rejected = _average_query_embedding(
-        frames_b64
-    )
+    (
+        query_embedding,
+        frames_used,
+        frames_total,
+        frames_rejected,
+        frame_qualities,
+    ) = _average_query_embedding(frames_b64)
     if query_embedding is None:
         return _empty_result(
             "no_face_detected",
@@ -552,10 +648,22 @@ def find_player(data, _request_id):
 
     query = np.expand_dims(query_embedding.astype(np.float32), axis=0)
     matches, search_summary = _search_unique_matches(
-        index, query, vectors, vectors_by_id, threshold, max_results
+        index, query, vectors, vectors_by_id, threshold, max_results, quality_filter
     )
     search_summary["cacheStatus"] = artifact_cache_status
-    _log_match_calibration(threshold, search_summary, len(matches), frames_used, frames_total)
+    search_summary["minFaceQuality"] = min_face_quality
+    search_summary["facesWithQuality"] = _count_faces_with_quality(vectors)
+    # Con el backend InsightFace ninguna cara trae calidad: reindexar no cambia nada.
+    search_summary["qualityAvailable"] = embedding_provides_quality()
+    _log_match_calibration(
+        threshold,
+        search_summary,
+        len(matches),
+        frames_used,
+        frames_total,
+        frame_qualities,
+        min_face_quality,
+    )
 
     search_summary["queryExpansionNeighbors"] = 0
     if use_query_expansion and matches:
@@ -568,6 +676,7 @@ def find_player(data, _request_id):
                 vectors_by_id,
                 threshold,
                 max_results,
+                quality_filter,
             )
             matches = _merge_expanded_matches(matches, expanded_matches, max_results)
             search_summary["queryExpansionNeighbors"] = neighbor_count

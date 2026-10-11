@@ -2,10 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 
 const DEFAULT_FACE_SIZE_PX = 28;
 const DEFAULT_FACE_DET_SCORE = 0.50;
+const DEFAULT_MIN_FACE_QUALITY = 0;
 
-export default function useIndexSettings(desktopApi) {
+export default function useIndexSettings(desktopApi, activeView) {
   const [faceSizePx, setFaceSizePx] = useState(DEFAULT_FACE_SIZE_PX);
   const [faceDetScore, setFaceDetScore] = useState(DEFAULT_FACE_DET_SCORE);
+  const [minFaceQuality, setMinFaceQuality] = useState(DEFAULT_MIN_FACE_QUALITY);
+  // Cobertura de calidad del indice: {faces, withQuality, qualityBackend} o null.
+  const [indexQuality, setIndexQuality] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState({ type: "idle", message: "" });
@@ -19,6 +23,8 @@ export default function useIndexSettings(desktopApi) {
         if (!active) return;
         setFaceSizePx(result?.faceSizePx ?? DEFAULT_FACE_SIZE_PX);
         setFaceDetScore(result?.faceDetScore ?? DEFAULT_FACE_DET_SCORE);
+        setMinFaceQuality(result?.minFaceQuality ?? DEFAULT_MIN_FACE_QUALITY);
+        setIndexQuality(result?.indexQuality ?? null);
       } catch {
         if (active) {
           setStatus({ type: "error", message: "No se pudieron cargar los ajustes de indexado." });
@@ -32,16 +38,30 @@ export default function useIndexSettings(desktopApi) {
     return () => { active = false; };
   }, [desktopApi]);
 
+  // Un reindexado pudo cambiar la cobertura de calidad: se vuelve a leer al entrar
+  // a Ajustes. Solo toca indexQuality, no los valores que el operador esta editando.
+  useEffect(() => {
+    if (activeView !== "settings") return undefined;
+    let active = true;
+    desktopApi
+      .invoke("config:get-index-settings")
+      .then((result) => {
+        if (active) setIndexQuality(result?.indexQuality ?? null);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [desktopApi, activeView]);
+
   const handleSave = useCallback(async () => {
     setSaving(true);
     setStatus({ type: "idle", message: "" });
 
     try {
-      await desktopApi.invoke("config:set-index-settings", { faceSizePx, faceDetScore });
+      await desktopApi.invoke("config:set-index-settings", { faceSizePx, faceDetScore, minFaceQuality });
       setStatus({
         type: "success",
         message:
-          "Ajustes guardados. Se aplican en el proximo 'Actualizar fotos', que va a reanalizar todo el catalogo."
+          "Ajustes guardados. La deteccion se aplica en el proximo 'Actualizar fotos', que va a reanalizar todo el catalogo. La calidad minima se aplica en la proxima busqueda."
       });
     } catch (error) {
       setStatus({
@@ -51,16 +71,19 @@ export default function useIndexSettings(desktopApi) {
     } finally {
       setSaving(false);
     }
-  }, [desktopApi, faceSizePx, faceDetScore]);
+  }, [desktopApi, faceSizePx, faceDetScore, minFaceQuality]);
 
   return {
     faceSizePx,
     faceDetScore,
+    minFaceQuality,
+    indexQuality,
     loading,
     saving,
     status,
     setFaceSizePx,
     setFaceDetScore,
+    setMinFaceQuality,
     handleSave
   };
 }

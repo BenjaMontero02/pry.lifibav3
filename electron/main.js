@@ -60,6 +60,9 @@ const SOURCE_PATH_CONFIG_KEY = "add source";
 const PLAYER_PREVIEW_CONFIG_KEY = "player preview photos";
 const INDEX_FACE_SIZE_CONFIG_KEY = "index.faceSizePx";
 const INDEX_FACE_DET_SCORE_CONFIG_KEY = "index.faceDetScore";
+// Calidad minima (norma AdaFace) de las caras que puede devolver una busqueda. 0 = apagado.
+const INDEX_MIN_FACE_QUALITY_CONFIG_KEY = "index.minFaceQuality";
+const MIN_FACE_QUALITY_MAX = 30;
 const SOURCE_PHOTO_SCHEME = "sourcephoto";
 const SOURCE_THUMB_SCHEME = "sourcethumb";
 const PHOTO_INDEX_STATUS_TABLE = "photo_index_status";
@@ -1064,6 +1067,34 @@ function getFaceIndexDir() {
   return path.join(app.getPath("userData"), "face-index");
 }
 
+// Cobertura de calidad del indice para Ajustes: cuantas caras la tienen y si el
+// backend guardado es AdaFace (InsightFace nunca la tiene). null si no se pudo leer.
+async function readIndexQualityCoverage() {
+  try {
+    // Solo el manifest: vectors.json puede pesar cientos de MB y parsearlo en el
+    // proceso principal congelaba la app al abrir Ajustes. Python resume la
+    // cobertura en `quality_coverage` cada vez que guarda los vectores.
+    const manifestRaw = await fs.promises.readFile(
+      path.join(getFaceIndexDir(), "photos_manifest.json"),
+      "utf8"
+    );
+    const manifest = JSON.parse(manifestRaw);
+    const coverage = manifest?.quality_coverage;
+    const embeddingModel = typeof manifest?.embedding_model === "string" ? manifest.embedding_model : "";
+    if (!coverage || !Number.isFinite(coverage.faces) || !Number.isFinite(coverage.withQuality)) {
+      // Indice armado antes de guardar calidad: se trata como sin calidad.
+      return { faces: 0, withQuality: 0, qualityBackend: embeddingModel.startsWith("adaface"), unknown: true };
+    }
+    return {
+      faces: coverage.faces,
+      withQuality: coverage.withQuality,
+      qualityBackend: embeddingModel.startsWith("adaface")
+    };
+  } catch {
+    return null;
+  }
+}
+
 function getThumbnailCacheDir() {
   return path.join(app.getPath("userData"), "thumb-cache");
 }
@@ -1732,9 +1763,12 @@ function registerIpc() {
   ipcMain.handle("config:get-index-settings", async () => {
     const faceSizePx = getConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY);
     const faceDetScore = getConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY);
+    const minFaceQuality = Number(getConfigurationValue(INDEX_MIN_FACE_QUALITY_CONFIG_KEY));
     return {
       faceSizePx: faceSizePx !== null ? Number(faceSizePx) : 28,
-      faceDetScore: faceDetScore !== null ? Number(faceDetScore) : 0.50
+      faceDetScore: faceDetScore !== null ? Number(faceDetScore) : 0.50,
+      minFaceQuality: Number.isFinite(minFaceQuality) && minFaceQuality > 0 ? minFaceQuality : 0,
+      indexQuality: await readIndexQualityCoverage()
     };
   });
 
@@ -1745,11 +1779,17 @@ function registerIpc() {
     const faceDetScore = payload?.faceDetScore != null
       ? Math.max(0.05, Math.min(0.99, Number(Number(payload.faceDetScore).toFixed(2))))
       : 0.50;
+    // Valor no numerico (o ausente) se guarda como 0: filtro apagado.
+    const requestedQuality = Number(payload?.minFaceQuality);
+    const minFaceQuality = payload?.minFaceQuality != null && Number.isFinite(requestedQuality)
+      ? Math.max(0, Math.min(MIN_FACE_QUALITY_MAX, Number(requestedQuality.toFixed(1))))
+      : 0;
 
     setConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY, String(faceSizePx));
     setConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY, String(faceDetScore));
+    setConfigurationValue(INDEX_MIN_FACE_QUALITY_CONFIG_KEY, String(minFaceQuality));
 
-    return { faceSizePx, faceDetScore };
+    return { faceSizePx, faceDetScore, minFaceQuality };
   });
 
   ipcMain.handle("config:pick-source-path", async () => {
@@ -1951,6 +1991,12 @@ function registerIpc() {
       }
       if (faceDetScore !== null) {
         extra.minFaceDetScore = Number(faceDetScore);
+      }
+    }
+    if (action === "find_player") {
+      const minFaceQuality = Number(getConfigurationValue(INDEX_MIN_FACE_QUALITY_CONFIG_KEY));
+      if (Number.isFinite(minFaceQuality) && minFaceQuality > 0) {
+        extra.minFaceQuality = minFaceQuality;
       }
     }
 

@@ -51,22 +51,40 @@ def _get_session():
     return _session
 
 
-def compute_embedding(image_bgr, face):
-    """Devuelve el embedding AdaFace L2-normalizado para una cara detectada.
+def _quality_from_outputs(outputs):
+    """Calidad = promedio de la norma del feature crudo de los dos crops.
+
+    La salida "norm" del ONNX (scripts/convert_adaface_to_onnx.py) es la norma
+    antes de normalizar: AdaFace la usa como proxy de calidad de imagen. Un
+    modelo sin esa salida (export viejo) da None: calidad desconocida.
+    """
+    if len(outputs) < 2:
+        return None
+    norms = np.asarray(outputs[1], dtype=np.float64).reshape(-1)[:2]
+    if norms.size == 0 or not np.all(np.isfinite(norms)):
+        return None
+    return float(norms.mean())
+
+
+def compute_embedding_with_quality(image_bgr, face):
+    """Devuelve ``(embedding, quality)`` para una cara detectada.
+
+    ``embedding`` es el AdaFace L2-normalizado; ``quality`` la norma promedio
+    del feature (ver ``_quality_from_outputs``), o None si el modelo no la trae.
 
     ``face`` es un objeto de insightface con ``kps`` (5 landmarks). Se promedia
     el embedding del crop con el de su espejo horizontal (flip TTA): mas estable
     con caras de perfil o borrosas. Ambos crops van en un solo batch.
 
-    Devuelve None si la cara no trae landmarks o el embedding es invalido.
-    Si la sesion ONNX no cargo LANZA: devolver None hacia que la foto quedara
-    marcada como "sin caras" y nunca se reintentara.
+    Devuelve ``(None, None)`` si la cara no trae landmarks o el embedding es
+    invalido. Si la sesion ONNX no cargo LANZA: devolver None hacia que la foto
+    quedara marcada como "sin caras" y nunca se reintentara.
     """
     from app.services.face_index_service import normalize_embedding
 
     landmarks = getattr(face, "kps", None)
     if landmarks is None:
-        return None
+        return None, None
 
     session = _get_session()
     if session is None:
@@ -81,7 +99,16 @@ def compute_embedding(image_bgr, face):
     blob = np.ascontiguousarray(np.transpose((crops / 255.0 - 0.5) / 0.5, (0, 3, 1, 2)))
 
     outputs = session.run(None, {"input": blob})
-    return normalize_embedding(outputs[0][0] + outputs[0][1])
+    embedding = normalize_embedding(outputs[0][0] + outputs[0][1])
+    if embedding is None:
+        return None, None
+    return embedding, _quality_from_outputs(outputs)
+
+
+def compute_embedding(image_bgr, face):
+    """Devuelve solo el embedding AdaFace L2-normalizado (ver compute_embedding_with_quality)."""
+    embedding, _quality = compute_embedding_with_quality(image_bgr, face)
+    return embedding
 
 
 def session_ok():

@@ -13,7 +13,7 @@ from app.services.face_index_service import (
     LARGE_IMAGE_MIN_SIDE,
     create_empty_index,
     detect_faces,
-    extract_face_embedding,
+    extract_face_embedding_with_quality,
     face_size_px,
     get_embedding_backend,
     get_embedding_backend_fallback,
@@ -323,27 +323,54 @@ def _save_dirty_artifacts(
     if dirty_vectors:
         save_json_file(vectors_path, vectors)
         writes["vectors"] = True
+        # Electron muestra en Ajustes cuantas caras tienen calidad. Leerlo de
+        # vectors.json (cientos de MB en un evento grande) congelaba la UI: se
+        # resume aca, en el manifest, que se escribe despues de los vectores.
+        manifest["quality_coverage"] = {
+            "faces": len(vectors),
+            "withQuality": sum(
+                1 for row in vectors if isinstance(row, dict) and row.get("quality") is not None
+            ),
+        }
+        dirty_manifest = True
     if dirty_manifest:
         save_json_file(manifest_path, manifest)
         writes["manifest"] = True
     return writes
 
 
+def _distribution_summary(values, digits):
+    """``min p10 p50 p90 max`` de ``values`` o guiones si no hay datos."""
+    if not values:
+        return "min=- p10=- p50=- p90=- max=-"
+    array = np.asarray(values, dtype=np.float64)
+    p10, p50, p90 = np.percentile(array, [10, 50, 90])
+    fmt = "{:." + str(digits) + "f}"
+    return "min={a} p10={b} p50={c} p90={d} max={e}".format(
+        a=fmt.format(array.min()),
+        b=fmt.format(p10),
+        c=fmt.format(p50),
+        d=fmt.format(p90),
+        e=fmt.format(array.max()),
+    )
+
+
 def _log_detection_calibration(
-    det_scores, below_threshold, small_faces, accepted, min_det_score, min_face_size
+    det_scores,
+    below_threshold,
+    small_faces,
+    accepted,
+    min_det_score,
+    min_face_size,
+    qualities=(),
 ):
-    """Una linea con la distribucion de det_score de la corrida, para calibrar umbrales."""
-    if det_scores:
-        scores = np.asarray(det_scores, dtype=np.float64)
-        p10, p50, p90 = np.percentile(scores, [10, 50, 90])
-        spread = "min={:.2f} p10={:.2f} p50={:.2f} p90={:.2f} max={:.2f}".format(
-            scores.min(), p10, p50, p90, scores.max()
-        )
-    else:
-        spread = "min=- p10=- p50=- p90=- max=-"
+    """Una linea con la distribucion de det_score y de calidad (norma AdaFace) de la corrida."""
+    spread = _distribution_summary(det_scores, 2)
+    quality_spread = _distribution_summary(qualities, 2)
     sys.stderr.write(
         "[face-calibration] index caras={total} {spread} bajo_umbral={below} "
-        "(umbral={thr:.2f} piso={floor:.2f}) chicas={small} (min={size}px) aceptadas={acc}\n".format(
+        "(umbral={thr:.2f} piso={floor:.2f}) chicas={small} (min={size}px) aceptadas={acc} "
+        "calidad[{count}]: {quality}\n".format(
             total=len(det_scores),
             spread=spread,
             below=below_threshold,
@@ -352,6 +379,8 @@ def _log_detection_calibration(
             small=small_faces,
             size=min_face_size,
             acc=accepted,
+            count=len(qualities),
+            quality=quality_spread,
         )
     )
 
@@ -565,6 +594,8 @@ def index_photos(data, request_id):
     det_scores_seen = []
     below_threshold_count = 0
     small_faces_count = 0
+    # Calidad (norma AdaFace) de las caras indexadas en esta corrida.
+    qualities_indexed = []
 
     tracebacks_written = 0
 
@@ -676,17 +707,19 @@ def index_photos(data, request_id):
                     else:
                         faces.append(face)
                 valid_embeddings = []
+                valid_qualities = []
                 for face in faces:
                     if not _passes_quality_filter(face, min_face_size, min_det_score):
                         faces_filtered_by_quality += 1
                         if face_size_px(face) < min_face_size:
                             small_faces_count += 1
                         continue
-                    embedding = extract_face_embedding(image, face)
+                    embedding, quality = extract_face_embedding_with_quality(image, face)
                     if embedding is None:
                         faces_filtered_by_quality += 1
                         continue
                     valid_embeddings.append(embedding)
+                    valid_qualities.append(quality)
 
                 faces_detected = len(valid_embeddings)
                 if faces_detected == 0:
@@ -723,9 +756,17 @@ def index_photos(data, request_id):
                 manifest["next_face_id"] = next_face_id
                 index.add_with_ids(embedding_matrix, np.asarray(face_ids, dtype=np.int64))
                 for face_ordinal, face_id in enumerate(face_ids):
-                    vectors.append(
-                        {"id": face_id, "photo_path": photo_path, "face_ordinal": face_ordinal}
-                    )
+                    vector_row = {
+                        "id": face_id,
+                        "photo_path": photo_path,
+                        "face_ordinal": face_ordinal,
+                    }
+                    # Calidad desconocida (backend InsightFace o modelo sin norma) = sin
+                    # clave: find_player nunca filtra esas filas.
+                    if valid_qualities[face_ordinal] is not None:
+                        vector_row["quality"] = round(float(valid_qualities[face_ordinal]), 3)
+                        qualities_indexed.append(vector_row["quality"])
+                    vectors.append(vector_row)
 
                 new_faces_indexed += faces_detected
                 if change_type in {"new", "modified"}:
@@ -819,6 +860,7 @@ def index_photos(data, request_id):
         new_faces_indexed,
         min_det_score,
         min_face_size,
+        qualities=qualities_indexed,
     )
 
     elapsed_ms = int((time.time() - started_at) * 1000)
