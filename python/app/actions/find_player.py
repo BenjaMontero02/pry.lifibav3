@@ -52,6 +52,20 @@ DEFAULT_MIN_FACE_QUALITY = 0.0
 # Piso del peso de un frame en el promedio de la consulta (evita pesos en cero).
 QUERY_WEIGHT_FLOOR = 1e-6
 
+# Escaneo en 3 angulos (opcional, toggle en la vista de escaneo). Cada angulo arma
+# su propia plantilla y se busca con todas: una foto de perfil del evento se
+# parece mas a la plantilla girada que al promedio frontal.
+QUERY_ANGLES = ("front", "left", "right")
+# Similitud minima entre la plantilla girada y la frontal para aceptar que es la
+# misma persona (la de frente vs girada ~30-45 grados suele quedar en 0.4-0.7;
+# otra persona, por debajo de 0.2). Es mas laxo que QUERY_FRAME_CONSISTENCY_MIN
+# porque compara poses distintas. Sin calibrar: se loguea la similitud real.
+QUERY_ANGLE_IDENTITY_MIN = 0.25
+# Giro minimo (desplazamiento de la nariz respecto del centro de los ojos, en
+# distancias interoculares) respecto del frente para dar por girada la cabeza.
+# Solo avisa, no descarta: el preview puede estar espejado y el signo no sirve.
+QUERY_ANGLE_MIN_TURN = 0.12
+
 _artifact_cache = {
     "index_path": None,
     "index_signature": None,
@@ -239,6 +253,16 @@ def _query_weights(qualities):
     return [1.0] * len(qualities)
 
 
+def _weighted_template(embeddings, qualities):
+    """Promedio ponderado por calidad y re-normalizado (el indice usa producto interno)."""
+    averaged = np.average(
+        np.stack(embeddings, axis=0),
+        axis=0,
+        weights=_query_weights(qualities),
+    )
+    return normalize_embedding(averaged)
+
+
 def _average_query_embedding(frames_b64):
     """Compute embeddings per frame and return the quality-weighted, L2-normalized average.
 
@@ -265,12 +289,7 @@ def _average_query_embedding(frames_b64):
     kept_positions, rejected = _consistent_positions(embeddings)
     kept_embeddings = [embeddings[position] for position in kept_positions]
     kept_qualities = [qualities[position] for position in kept_positions]
-    averaged = np.average(
-        np.stack(kept_embeddings, axis=0),
-        axis=0,
-        weights=_query_weights(kept_qualities),
-    )
-    normalized = normalize_embedding(averaged)
+    normalized = _weighted_template(kept_embeddings, kept_qualities)
     return normalized, len(kept_positions), len(frames_b64), rejected, qualities
 
 
@@ -349,7 +368,13 @@ def _resolve_max_results(data):
 
 
 def _primary_face_embedding(image):
-    """``(embedding, quality)`` of the player's face in a webcam frame, or ``(None, None)``.
+    """``(embedding, quality)`` of the player's face in a webcam frame, or ``(None, None)``."""
+    embedding, quality, _face = _primary_face(image)
+    return embedding, quality
+
+
+def _primary_face(image):
+    """``(embedding, quality, face)`` of the player's face in a webcam frame.
 
     The player stands in front of the camera, so the main face is the biggest
     one (weighted by detection confidence). Picking by confidence alone let a
@@ -367,8 +392,203 @@ def _primary_face_embedding(image):
     for face in faces:
         embedding, quality = extract_face_embedding_with_quality(image, face)
         if embedding is not None:
-            return embedding, quality
-    return None, None
+            return embedding, quality, face
+    return None, None, None
+
+
+def _estimate_yaw(face):
+    """Giro aproximado de la cabeza a partir de los 5 landmarks de SCRFD (ojo izq.,
+    ojo der., nariz, ...): desplazamiento horizontal de la nariz respecto del centro
+    de los ojos, en distancias interoculares. ~0 de frente. None sin landmarks."""
+    landmarks = getattr(face, "kps", None)
+    if landmarks is None or len(landmarks) < 3:
+        return None
+    left_eye, right_eye, nose = (np.asarray(point, dtype=np.float32) for point in landmarks[:3])
+    eye_distance = float(np.linalg.norm(right_eye - left_eye))
+    if eye_distance <= 0:
+        return None
+    return float((nose[0] - (left_eye[0] + right_eye[0]) / 2.0) / eye_distance)
+
+
+def _resolve_frame_groups(data):
+    """``[(angulo, frames)]`` del escaneo en 3 angulos, o None si no se pidio.
+
+    Exige el angulo frontal (es la referencia de identidad) y respeta el mismo
+    tope total de frames que el escaneo comun."""
+    groups = (data or {}).get("frameGroups")
+    if groups is None:
+        return None
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("frameGroups must be a non-empty list.")
+
+    resolved = []
+    seen_angles = set()
+    total_frames = 0
+    for group in groups:
+        if not isinstance(group, dict):
+            raise ValueError("Each frame group must be an object with angle and frames.")
+        angle = group.get("angle")
+        frames = group.get("frames")
+        if angle not in QUERY_ANGLES or angle in seen_angles:
+            raise ValueError(f"Invalid or repeated frame group angle: {angle!r}.")
+        if not isinstance(frames, list) or not frames:
+            raise ValueError(f"Frame group {angle!r} must have a non-empty frames list.")
+        seen_angles.add(angle)
+        total_frames += len(frames)
+        resolved.append((angle, frames))
+
+    if "front" not in seen_angles:
+        raise ValueError("frameGroups must include the 'front' angle.")
+    if total_frames > MAX_QUERY_FRAMES:
+        raise ValueError(f"frameGroups cannot contain more than {MAX_QUERY_FRAMES} images in total.")
+    return resolved
+
+
+def _angle_group_template(frames_b64):
+    """Plantilla de un angulo: frames consistentes ENTRE SI (no contra el frente,
+    que descartaria justamente los girados), ponderados por calidad."""
+    embeddings = []
+    qualities = []
+    yaws = []
+    for frame_b64 in frames_b64:
+        image = _decode_frame_image(frame_b64)
+        embedding, quality, face = _primary_face(image)
+        if embedding is not None:
+            embeddings.append(embedding)
+            qualities.append(quality)
+            yaws.append(_estimate_yaw(face))
+
+    group = {
+        "template": None,
+        "embeddings": [],
+        "qualities": [],
+        "frameQualities": qualities,
+        "framesUsed": 0,
+        "framesTotal": len(frames_b64),
+        "framesRejected": 0,
+        "yaw": None,
+    }
+    if not embeddings:
+        return group
+
+    kept_positions, rejected = _consistent_positions(embeddings)
+    kept_embeddings = [embeddings[position] for position in kept_positions]
+    kept_qualities = [qualities[position] for position in kept_positions]
+    kept_yaws = [yaws[position] for position in kept_positions if yaws[position] is not None]
+    group.update(
+        {
+            "template": _weighted_template(kept_embeddings, kept_qualities),
+            "embeddings": kept_embeddings,
+            "qualities": kept_qualities,
+            "framesUsed": len(kept_positions),
+            "framesRejected": rejected,
+            "yaw": float(np.median(kept_yaws)) if kept_yaws else None,
+        }
+    )
+    return group
+
+
+def _build_angle_templates(frame_groups):
+    """Arma las plantillas por angulo y valida que los girados sean la misma persona.
+
+    Devuelve ``(plantillas, resumen_por_angulo, grupos)``. ``plantillas`` es
+    ``[(nombre, embedding)]``: primero el promedio de todos los frames aceptados
+    (la consulta equivalente al escaneo comun) y despues cada angulo aceptado.
+    Sin cara frontal devuelve plantillas vacias."""
+    groups = {angle: _angle_group_template(frames) for angle, frames in frame_groups}
+    front = groups["front"]
+    angle_summary = [
+        {
+            "angle": "front",
+            "status": "ok" if front["template"] is not None else "no_face",
+            "framesUsed": front["framesUsed"],
+            "framesTotal": front["framesTotal"],
+            "yaw": None if front["yaw"] is None else round(front["yaw"], 3),
+        }
+    ]
+    if front["template"] is None:
+        return [], angle_summary, groups
+
+    accepted = ["front"]
+    for angle, _frames in frame_groups:
+        if angle == "front":
+            continue
+        group = groups[angle]
+        entry = {
+            "angle": angle,
+            "framesUsed": group["framesUsed"],
+            "framesTotal": group["framesTotal"],
+            "yaw": None if group["yaw"] is None else round(group["yaw"], 3),
+        }
+        if group["template"] is None:
+            entry["status"] = "no_face"
+        else:
+            similarity = float(np.dot(group["template"], front["template"]))
+            entry["similarityToFront"] = round(similarity, 4)
+            if similarity < QUERY_ANGLE_IDENTITY_MIN:
+                # Otra persona quedo como cara principal (o la captura fue mala).
+                entry["status"] = "rejected_identity"
+            else:
+                entry["status"] = "ok"
+                accepted.append(angle)
+            if group["yaw"] is not None and front["yaw"] is not None:
+                entry["turnedEnough"] = abs(group["yaw"] - front["yaw"]) >= QUERY_ANGLE_MIN_TURN
+        angle_summary.append(entry)
+
+    all_embeddings = [emb for angle in accepted for emb in groups[angle]["embeddings"]]
+    all_qualities = [quality for angle in accepted for quality in groups[angle]["qualities"]]
+    mean_template = _weighted_template(all_embeddings, all_qualities)
+    templates = [("mean", mean_template)] + [(angle, groups[angle]["template"]) for angle in accepted]
+    return templates, angle_summary, groups
+
+
+def _fuse_template_matches(matches_by_template, limit):
+    """Une las coincidencias de cada plantilla quedandose con la MAYOR similitud por
+    foto. Marca ``viaSideAngle`` las fotos que solo entraron por una plantilla girada:
+    cada plantilla extra es otra oportunidad de que un parecido pase el umbral."""
+    fused = {}
+    admitted_by_main = set()
+    for template_name, matches in matches_by_template:
+        for match in matches:
+            photo_path = match["photoPath"]
+            if template_name in ("mean", "front"):
+                admitted_by_main.add(photo_path)
+            current = fused.get(photo_path)
+            if current is None or match["similarity"] > current["similarity"]:
+                fused[photo_path] = {**match, "matchedBy": template_name}
+
+    for photo_path, match in fused.items():
+        if photo_path not in admitted_by_main:
+            match["viaSideAngle"] = True
+    ordered = sorted(fused.values(), key=lambda row: row["similarity"], reverse=True)
+    return ordered[:limit]
+
+
+def _log_angle_calibration(angle_summary, template_summaries):
+    parts = []
+    for entry in angle_summary:
+        parts.append(
+            "{angle}:{status} sim={sim} yaw={yaw} frames={used}/{total}".format(
+                angle=entry["angle"],
+                status=entry["status"],
+                sim=entry.get("similarityToFront", "-"),
+                yaw="-" if entry.get("yaw") is None else entry["yaw"],
+                used=entry["framesUsed"],
+                total=entry["framesTotal"],
+            )
+        )
+    tops = " ".join(
+        "{name}=[{top}]".format(
+            name=name,
+            top=",".join("{:.4f}".format(value) for value in summary.get("topSimilarities", [])),
+        )
+        for name, summary in template_summaries
+    )
+    sys.stderr.write(
+        "[face-calibration] find_player angulos {parts} top {tops}\n".format(
+            parts=" | ".join(parts), tops=tops
+        )
+    )
 
 
 def _unique_matches(indices, distances, vectors_by_id, threshold, limit, min_quality=None):
@@ -625,14 +845,27 @@ def find_player(data, _request_id):
             embeddingModel=get_face_model_name(),
         )
 
-    frames_b64 = _resolve_frames(data)
-    (
-        query_embedding,
-        frames_used,
-        frames_total,
-        frames_rejected,
-        frame_qualities,
-    ) = _average_query_embedding(frames_b64)
+    frame_groups = _resolve_frame_groups(data)
+    angle_templates = []
+    angle_summary = None
+    if frame_groups is not None:
+        angle_templates, angle_summary, angle_groups = _build_angle_templates(frame_groups)
+        query_embedding = angle_templates[0][1] if angle_templates else None
+        frames_used = sum(group["framesUsed"] for group in angle_groups.values())
+        frames_total = sum(group["framesTotal"] for group in angle_groups.values())
+        frames_rejected = sum(group["framesRejected"] for group in angle_groups.values())
+        frame_qualities = [
+            quality for group in angle_groups.values() for quality in group["frameQualities"]
+        ]
+    else:
+        frames_b64 = _resolve_frames(data)
+        (
+            query_embedding,
+            frames_used,
+            frames_total,
+            frames_rejected,
+            frame_qualities,
+        ) = _average_query_embedding(frames_b64)
     if query_embedding is None:
         return _empty_result(
             "no_face_detected",
@@ -644,12 +877,35 @@ def find_player(data, _request_id):
             framesUsed=frames_used,
             framesTotal=frames_total,
             framesRejected=frames_rejected,
+            **({"angles": angle_summary} if angle_summary is not None else {}),
         )
 
     query = np.expand_dims(query_embedding.astype(np.float32), axis=0)
     matches, search_summary = _search_unique_matches(
         index, query, vectors, vectors_by_id, threshold, max_results, quality_filter
     )
+    if angle_templates:
+        # Una busqueda por plantilla (la primera, el promedio, ya se hizo arriba)
+        # y fusion por maxima similitud por foto.
+        matches_by_template = [("mean", matches)]
+        template_summaries = [("mean", search_summary)]
+        for template_name, template in angle_templates[1:]:
+            template_matches, template_summary = _search_unique_matches(
+                index,
+                np.expand_dims(template.astype(np.float32), axis=0),
+                vectors,
+                vectors_by_id,
+                threshold,
+                max_results,
+                quality_filter,
+            )
+            matches_by_template.append((template_name, template_matches))
+            template_summaries.append((template_name, template_summary))
+        matches = _fuse_template_matches(matches_by_template, max_results)
+        search_summary["templateTopSimilarities"] = {
+            name: summary.get("topSimilarities", []) for name, summary in template_summaries
+        }
+        _log_angle_calibration(angle_summary, template_summaries)
     search_summary["cacheStatus"] = artifact_cache_status
     search_summary["minFaceQuality"] = min_face_quality
     search_summary["facesWithQuality"] = _count_faces_with_quality(vectors)
@@ -696,9 +952,10 @@ def find_player(data, _request_id):
             framesUsed=frames_used,
             framesTotal=frames_total,
             framesRejected=frames_rejected,
+            **({"angles": angle_summary} if angle_summary is not None else {}),
         )
 
-    return {
+    result = {
         "status": "ok",
         "threshold": threshold,
         "maxResults": max_results,
@@ -709,3 +966,6 @@ def find_player(data, _request_id):
         "framesTotal": frames_total,
         "framesRejected": frames_rejected,
     }
+    if angle_summary is not None:
+        result["angles"] = angle_summary
+    return result

@@ -17,6 +17,17 @@ const SCAN_CAMERA_START_TIMEOUT_MS = 8_000;
 // promediarlos no reducia la variacion entre un escaneo y el siguiente.
 const SCAN_CAPTURE_FRAME_COUNT = 7;
 const SCAN_CAPTURE_FRAME_INTERVAL_MS = 200;
+// Escaneo en 3 angulos (opcional): una rafaga por angulo con una pausa antes para
+// que el jugador gire. 4 frames x 3 = 12, bajo el tope de 16 de Python. Se pide
+// girar "un poco": de perfil completo los landmarks del detector fallan.
+const ANGLE_CAPTURE_FRAME_COUNT = 4;
+const ANGLE_CAPTURE_STEPS = [
+  { angle: "front", prompt: "Mirá a la cámara", leadMs: 900 },
+  { angle: "left", prompt: "Girá un poco la cabeza hacia tu izquierda", leadMs: 1600 },
+  { angle: "right", prompt: "Ahora girá un poco hacia tu derecha", leadMs: 1600 }
+];
+const ANGLE_SEARCH_PROMPT = "¡Listo! Buscando tus fotos…";
+const ANGLE_LABELS = { front: "de frente", left: "izquierda", right: "derecha" };
 
 function clampThreshold(value) {
   const numeric = Number(value);
@@ -31,10 +42,11 @@ function loadScanSettings() {
     const parsed = JSON.parse(window.localStorage.getItem(SCAN_SETTINGS_STORAGE_KEY) || "null");
     return {
       threshold: clampThreshold(parsed?.threshold ?? DEFAULT_SIMILARITY_THRESHOLD),
-      queryExpansion: parsed?.queryExpansion === true
+      queryExpansion: parsed?.queryExpansion === true,
+      multiAngle: parsed?.multiAngle === true
     };
   } catch {
-    return { threshold: DEFAULT_SIMILARITY_THRESHOLD, queryExpansion: false };
+    return { threshold: DEFAULT_SIMILARITY_THRESHOLD, queryExpansion: false, multiAngle: false };
   }
 }
 
@@ -65,6 +77,32 @@ function describeQualityFilter(search) {
       ? " El indice no tiene calidad guardada en todas las caras: usa 'Reindexar todo' en Fotos para que el filtro aplique."
       : "";
   return `${hiddenText}${reindexText}`;
+}
+
+// Resumen del escaneo en 3 angulos para el operador: angulos descartados, sin
+// cara o casi sin giro, y cuantas fotos entraron solo por un angulo girado.
+function describeAngles(angles, matches) {
+  if (!Array.isArray(angles)) {
+    return "";
+  }
+  const notes = [];
+  angles.forEach((entry) => {
+    const label = ANGLE_LABELS[entry.angle] || entry.angle;
+    if (entry.status === "rejected_identity") {
+      notes.push(`se descarto el angulo ${label} (no parecia la misma persona)`);
+    } else if (entry.status === "no_face") {
+      notes.push(`no se vio la cara en el angulo ${label}`);
+    } else if (entry.turnedEnough === false) {
+      notes.push(`en el angulo ${label} casi no giro la cabeza`);
+    }
+  });
+  const sideOnly = (matches || []).filter((match) => match.viaSideAngle).length;
+  const sideText =
+    sideOnly > 0
+      ? ` ${sideOnly} ${sideOnly === 1 ? "foto aparecio" : "fotos aparecieron"} solo por los angulos girados (marcadas "angulo"): revisalas.`
+      : "";
+  const notesText = notes.length > 0 ? ` Angulos: ${notes.join("; ")}.` : "";
+  return `${notesText}${sideText}`;
 }
 
 function delay(ms) {
@@ -150,6 +188,9 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const [scanSettings, setScanSettings] = useState(loadScanSettings);
   const scanThreshold = scanSettings.threshold;
   const scanQueryExpansion = scanSettings.queryExpansion;
+  const scanMultiAngle = scanSettings.multiAngle;
+  // Indicacion visible durante la captura guiada (operador y pantalla del jugador).
+  const [scanPrompt, setScanPrompt] = useState(null);
   const [scanVideoReady, setScanVideoReady] = useState(false);
   const [scanCameraActive, setScanCameraActive] = useState(false);
   const [scanCameraStarting, setScanCameraStarting] = useState(false);
@@ -186,6 +227,21 @@ export default function useScanPlayer({ desktopApi, activeView }) {
   const setScanQueryExpansion = useCallback(
     (enabled) => updateScanSettings({ queryExpansion: Boolean(enabled) }),
     [updateScanSettings]
+  );
+
+  const setScanMultiAngle = useCallback(
+    (enabled) => updateScanSettings({ multiAngle: Boolean(enabled) }),
+    [updateScanSettings]
+  );
+
+  // Muestra (o borra con null) la indicacion en el video del operador y en la
+  // pantalla publica. Un fallo del IPC no corta el escaneo.
+  const showScanPrompt = useCallback(
+    (text) => {
+      setScanPrompt(text);
+      desktopApi.invoke("player:set-scan-prompt", { text }).catch(() => {});
+    },
+    [desktopApi]
   );
 
   const refreshWebcams = useCallback(async () => {
@@ -310,23 +366,46 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     setScanInProgress(true);
     setScanStatus({ type: "idle", message: "" });
 
-    try {
+    // Rafaga de frames; null si el escaneo se aborto en el medio.
+    const captureBurst = async (count) => {
       const frames = [];
-      for (let frameIndex = 0; frameIndex < SCAN_CAPTURE_FRAME_COUNT; frameIndex += 1) {
+      for (let frameIndex = 0; frameIndex < count; frameIndex += 1) {
         if (abortController.signal.aborted) {
-          return;
+          return null;
         }
         frames.push(captureVideoFrame(videoElement, canvasElement));
-        if (frameIndex < SCAN_CAPTURE_FRAME_COUNT - 1) {
+        if (frameIndex < count - 1) {
           await delay(SCAN_CAPTURE_FRAME_INTERVAL_MS);
         }
       }
-      if (abortController.signal.aborted) {
-        return;
+      return abortController.signal.aborted ? null : frames;
+    };
+
+    try {
+      let framesPayload;
+      if (scanMultiAngle) {
+        const frameGroups = [];
+        for (const step of ANGLE_CAPTURE_STEPS) {
+          showScanPrompt(step.prompt);
+          await delay(step.leadMs);
+          const frames = await captureBurst(ANGLE_CAPTURE_FRAME_COUNT);
+          if (!frames) {
+            return;
+          }
+          frameGroups.push({ angle: step.angle, frames });
+        }
+        showScanPrompt(ANGLE_SEARCH_PROMPT);
+        framesPayload = { frameGroups };
+      } else {
+        const frames = await captureBurst(SCAN_CAPTURE_FRAME_COUNT);
+        if (!frames) {
+          return;
+        }
+        framesPayload = { frames };
       }
 
       const response = await desktopApi.sendToPython("find_player", {
-        frames,
+        ...framesPayload,
         similarityThreshold: clampThreshold(scanThreshold),
         maxResults: SCAN_MAX_RESULTS,
         queryExpansion: scanQueryExpansion
@@ -347,13 +426,18 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       setSelectedMatchKeys([]);
 
       if (result.status === "no_face_detected") {
-        setScanStatus({ type: "error", message: "No se detecto una cara en los frames capturados." });
+        setScanStatus({
+          type: "error",
+          message: Array.isArray(result.angles)
+            ? "No se detecto la cara de frente. Pedile al jugador que mire a la camara y repeti."
+            : "No se detecto una cara en los frames capturados."
+        });
         return;
       }
       if (result.status === "no_matches_above_threshold") {
         setScanStatus({
           type: "error",
-          message: `No se encontraron fotos con suficiente similitud. Proba bajando el umbral de coincidencia.${describeQualityFilter(result.search)}`
+          message: `No se encontraron fotos con suficiente similitud. Proba bajando el umbral de coincidencia.${describeQualityFilter(result.search)}${describeAngles(result.angles, [])}`
         });
         return;
       }
@@ -386,7 +470,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
           : "";
       setScanStatus({
         type: "success",
-        message: `Se encontraron ${matches.length} fotos.${moreText}${rejectedText}${describeQualityFilter(result.search)}`
+        message: `Se encontraron ${matches.length} fotos.${moreText}${rejectedText}${describeQualityFilter(result.search)}${describeAngles(result.angles, matches)}`
       });
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -401,14 +485,42 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     } finally {
       // Un escaneo abortado por uno nuevo no apaga el "Buscando..." del nuevo.
       // Si lo aborto stopScanCamera (ref en null) si hay que apagarlo.
+      // La indicacion se borra siempre (error, aborto, "Nuevo jugador"): nunca debe
+      // quedar "Gira a tu izquierda" en la pantalla publica.
       if (scanCaptureAbortRef.current === abortController) {
         scanCaptureAbortRef.current = null;
         setScanInProgress(false);
+        if (scanMultiAngle) {
+          showScanPrompt(null);
+        }
       } else if (scanCaptureAbortRef.current === null) {
         setScanInProgress(false);
+        if (scanMultiAngle) {
+          showScanPrompt(null);
+        }
       }
     }
-  }, [desktopApi, scanCameraActive, scanQueryExpansion, scanThreshold, scanVideoReady]);
+  }, [
+    desktopApi,
+    scanCameraActive,
+    scanMultiAngle,
+    scanQueryExpansion,
+    scanThreshold,
+    scanVideoReady,
+    showScanPrompt
+  ]);
+
+  // Esc durante la captura guiada: cancela sin buscar.
+  const handleCancelScan = useCallback(() => {
+    if (!scanCaptureAbortRef.current) {
+      return;
+    }
+    scanCaptureAbortRef.current.abort();
+    scanCaptureAbortRef.current = null;
+    setScanInProgress(false);
+    showScanPrompt(null);
+    setScanStatus({ type: "idle", message: "Escaneo cancelado." });
+  }, [showScanPrompt]);
 
   const toggleMatchSelection = useCallback((matchKey) => {
     setSelectedMatchKeys((current) =>
@@ -549,6 +661,7 @@ export default function useScanPlayer({ desktopApi, activeView }) {
       scanCaptureAbortRef.current = null;
       setScanInProgress(false);
     }
+    showScanPrompt(null);
     clearMatches();
     setJumpToMatchValue("");
     setJumpToMatchFeedback({ type: "idle", message: "" });
@@ -565,13 +678,15 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     } finally {
       setClearingPlayer(false);
     }
-  }, [clearMatches, desktopApi]);
+  }, [clearMatches, desktopApi, showScanPrompt]);
 
   return {
     availableCameras,
     selectedCameraId,
     scanThreshold,
     scanQueryExpansion,
+    scanMultiAngle,
+    scanPrompt,
     scanCameraStarting,
     scanCameraActive,
     scanVideoReady,
@@ -591,9 +706,11 @@ export default function useScanPlayer({ desktopApi, activeView }) {
     setSelectedCameraId,
     setScanThreshold,
     setScanQueryExpansion,
+    setScanMultiAngle,
     setJumpToMatchValue,
     handleToggleScanCamera,
     handleCaptureAndSearch,
+    handleCancelScan,
     handleScanVideoLoadedMetadata,
     handleJumpToMatch,
     handleSendPreview,

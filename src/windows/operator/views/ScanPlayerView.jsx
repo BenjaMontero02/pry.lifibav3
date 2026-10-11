@@ -7,6 +7,8 @@ export default function ScanPlayerView({
   selectedCameraId,
   scanThreshold,
   scanQueryExpansion,
+  scanMultiAngle,
+  scanPrompt,
   indexingPhotos,
   scanCameraStarting,
   scanCameraActive,
@@ -27,8 +29,10 @@ export default function ScanPlayerView({
   onSelectedCameraIdChange,
   onScanThresholdChange,
   onScanQueryExpansionChange,
+  onScanMultiAngleChange,
   onToggleCamera,
   onCaptureAndSearch,
+  onCancelScan,
   onVideoLoadedMetadata,
   onJumpToMatchValueChange,
   onJumpToMatch,
@@ -85,6 +89,11 @@ export default function ScanPlayerView({
         }
         return;
       }
+      if (!ctrl && !event.shiftKey && key === "escape" && scanInProgress && scanPrompt) {
+        event.preventDefault();
+        onCancelScan();
+        return;
+      }
       if (!ctrl && !event.shiftKey && key === "escape" && selectedCount > 0) {
         event.preventDefault();
         onClearMatchSelection();
@@ -100,12 +109,15 @@ export default function ScanPlayerView({
     canNewPlayer,
     canPrint,
     hasMatches,
+    onCancelScan,
     onCaptureAndSearch,
     onClearMatchSelection,
     onNewPlayer,
     onPrintSelected,
     onSelectAllMatches,
+    scanInProgress,
     scanMatches.length,
+    scanPrompt,
     selectedCount
   ]);
 
@@ -199,6 +211,17 @@ export default function ScanPlayerView({
             borrosas. Puede traer fotos de otra persona parecida.
           </span>
         </label>
+        <label className="scan-tuning-toggle">
+          <input
+            type="checkbox"
+            checked={scanMultiAngle}
+            onChange={(event) => onScanMultiAngleChange(event.target.checked)}
+          />
+          <span>
+            Escaneo en 3 angulos (experimental): guia al jugador para mirar de frente y girar un poco a cada
+            lado, y busca con cada angulo. Ayuda con fotos de perfil; tarda unos 6 segundos. Esc cancela.
+          </span>
+        </label>
       </div>
 
       <div className="scan-layout">
@@ -212,6 +235,11 @@ export default function ScanPlayerView({
             playsInline
             onLoadedMetadata={onVideoLoadedMetadata}
           />
+          {scanPrompt ? (
+            <p className="scan-prompt-overlay" role="status" aria-live="assertive">
+              {scanPrompt}
+            </p>
+          ) : null}
           {scanCameraStarting || (scanCameraActive && !scanVideoReady) ? (
             <p className="meta">Inicializando camara...</p>
           ) : null}
@@ -344,6 +372,11 @@ export default function ScanPlayerView({
                     height="300"
                   />
                   <span className="scan-match-number" aria-hidden="true">#{match.displayNumber}</span>
+                  {match.viaSideAngle ? (
+                    <span className="scan-match-angle" title="Solo la encontro un angulo girado: revisala">
+                      angulo
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>

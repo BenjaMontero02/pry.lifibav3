@@ -129,6 +129,8 @@ export default function App() {
               selectedCameraId={scan.selectedCameraId}
               scanThreshold={scan.scanThreshold}
               scanQueryExpansion={scan.scanQueryExpansion}
+              scanMultiAngle={scan.scanMultiAngle}
+              scanPrompt={scan.scanPrompt}
               indexingPhotos={photos.indexingPhotos}
               scanCameraStarting={scan.scanCameraStarting}
               scanCameraActive={scan.scanCameraActive}
@@ -149,8 +151,10 @@ export default function App() {
               onSelectedCameraIdChange={scan.setSelectedCameraId}
               onScanThresholdChange={scan.setScanThreshold}
               onScanQueryExpansionChange={scan.setScanQueryExpansion}
+              onScanMultiAngleChange={scan.setScanMultiAngle}
               onToggleCamera={scan.handleToggleScanCamera}
               onCaptureAndSearch={scan.handleCaptureAndSearch}
+              onCancelScan={scan.handleCancelScan}
               onVideoLoadedMetadata={scan.handleScanVideoLoadedMetadata}
               onJumpToMatchValueChange={scan.setJumpToMatchValue}
               onJumpToMatch={scan.handleJumpToMatch}

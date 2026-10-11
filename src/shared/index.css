@@ -1167,6 +1167,41 @@ body {
   display: none;
 }
 
+/* Indicacion de la captura en 3 angulos, sobre el video del operador. */
+.scan-preview {
+  position: relative;
+}
+
+.scan-prompt-overlay {
+  position: absolute;
+  left: 1.5rem;
+  right: 1.5rem;
+  top: 1.5rem;
+  z-index: 3;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-control);
+  background: rgba(17, 24, 39, 0.82);
+  color: #FFFFFF;
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Foto que solo entro por un angulo girado: el operador la revisa antes de imprimir. */
+.scan-match-angle {
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  z-index: 2;
+  border-radius: 999px;
+  background: rgba(180, 83, 9, 0.92);
+  color: #FFFFFF;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .scan-results {
   display: flex;
   flex-direction: column;
@@ -1397,6 +1432,27 @@ body {
   box-sizing: border-box;
   background: var(--bg);
   color: var(--ink);
+}
+
+/* Indicacion del escaneo en 3 angulos: tapa la pantalla para que el jugador la vea. */
+.player-scan-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: rgba(17, 24, 39, 0.86);
+}
+
+.player-scan-prompt p {
+  margin: 0;
+  max-width: 22ch;
+  color: #FFFFFF;
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
 }
 
 .player-stage {

@@ -14,11 +14,13 @@ const INVOKE_CHANNELS = new Set([
   "photos:open-external",
   "player:set-preview-photos",
   "player:get-preview-photos",
+  "player:set-scan-prompt",
   "print:send"
 ]);
 const EVENT_CHANNELS = new Set([
   "python:progress",
   "player:preview-photos",
+  "player:scan-prompt",
   "sourcepad:changed",
   "sourcepad:watch-error",
   "sourcepad:thumbnail-progress"

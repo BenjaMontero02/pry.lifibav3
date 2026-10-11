@@ -120,6 +120,17 @@ export default function App() {
   const [previewPayload, setPreviewPayload] = useState(EMPTY_PAYLOAD);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);
+  // Indicacion del escaneo en 3 angulos ("Mira a la camara"...); null = oculta.
+  const [scanPrompt, setScanPrompt] = useState(null);
+
+  useEffect(() => {
+    if (!desktopApi?.on) {
+      return undefined;
+    }
+    return desktopApi.on("player:scan-prompt", (payload) => {
+      setScanPrompt(typeof payload?.text === "string" && payload.text ? payload.text : null);
+    });
+  }, [desktopApi]);
 
   useEffect(() => {
     let active = true;
@@ -328,6 +339,11 @@ export default function App() {
           </section>
         )}
       </section>
+      {scanPrompt ? (
+        <div className="player-scan-prompt" role="status" aria-live="assertive">
+          <p>{scanPrompt}</p>
+        </div>
+      ) : null}
     </main>
   );
 }

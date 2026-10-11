@@ -67,6 +67,7 @@ const MIN_FACE_QUALITY_MAX = 30;
 // encuentra caras mas chicas a cambio de un analisis 1.5-3 veces mas lento.
 const INDEX_DETECTION_MODE_CONFIG_KEY = "index.detectionMode";
 const DETECTION_MODES = ["standard", "precise"];
+const MAX_SCAN_PROMPT_CHARS = 120;
 const SOURCE_PHOTO_SCHEME = "sourcephoto";
 const SOURCE_THUMB_SCHEME = "sourcethumb";
 const PHOTO_INDEX_STATUS_TABLE = "photo_index_status";
@@ -1703,7 +1704,7 @@ function clearFaceIndex() {
 const PYTHON_ACTION_DATA_FIELDS = {
   ping: [],
   index_photos: ["forceReindex"],
-  find_player: ["frames", "similarityThreshold", "maxResults", "queryExpansion"]
+  find_player: ["frames", "frameGroups", "similarityThreshold", "maxResults", "queryExpansion"]
 };
 
 function pickPythonActionData(action, data) {
@@ -1961,6 +1962,18 @@ function registerIpc() {
   });
 
   ipcMain.handle("player:get-preview-photos", async () => playerPreviewPayload);
+
+  // Indicacion grande en la pantalla publica durante el escaneo en 3 angulos
+  // ("Mira a la camara", "Gira a tu izquierda"...). null la borra. No enfoca la
+  // ventana del jugador: el operador sigue usando el teclado.
+  ipcMain.handle("player:set-scan-prompt", async (_event, payload) => {
+    const rawText = typeof payload?.text === "string" ? payload.text.trim() : "";
+    const text = rawText ? rawText.slice(0, MAX_SCAN_PROMPT_CHARS) : null;
+    if (playerWindow && !playerWindow.isDestroyed()) {
+      playerWindow.webContents.send("player:scan-prompt", { text });
+    }
+    return { sent: true, text };
+  });
 
   ipcMain.handle("python:request", async (_event, payload) => {
     const { action, data } = payload || {};
