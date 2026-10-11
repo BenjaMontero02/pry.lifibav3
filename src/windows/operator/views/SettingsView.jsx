@@ -126,7 +126,8 @@ export default function SettingsView({
             />
             <span>
               Deteccion precisa (mas lenta): en fotos grandes agrega una pasada a mayor resolucion para encontrar
-              caras mas chicas o lejanas. El analisis tarda mas (en pruebas, entre 1,5 y 3 veces). Al cambiarlo, el proximo
+              caras mas chicas o lejanas. El analisis tarda mas (en pruebas, entre 1,5 y 3 veces) y usa mas memoria (~3 GB de pico contra ~1,7 GB):
+              conviene una PC con 8 GB o mas. Al cambiarlo, el proximo
               "Actualizar fotos" vuelve a analizar todo el catalogo.
             </span>
           </label>
