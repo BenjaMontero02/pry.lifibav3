@@ -148,7 +148,7 @@ pnpm.cmd run build
 | `ELECTRON_RUN_AS_NODE is set` en `smoke:dev` | La shell fuerza Electron a comportarse como Node | Ejecutar `Remove-Item Env:ELECTRON_RUN_AS_NODE` en esa PowerShell y reintentar. |
 | Puerto `5173` ocupado | Vite ya esta corriendo o quedo un proceso stale | Si es una corrida parcial, seguir. Si no, inspeccionar con `netstat -ano | findstr :5173` y cerrar el PID stale antes de `pnpm.cmd run dev`. |
 | Electron no encuentra binario | Postinstall incompleto | Probar `node node_modules/electron/install.js`; si no alcanza, `pnpm.cmd install --force`. |
-| `.venv` ausente o Python falla | Entorno Python no preparado | Ejecutar `python -m venv .venv` y despues `.\.venv\Scripts\python.exe -m pip install -r python\requirements.txt`. |
+| `.venv` ausente o Python falla | Entorno Python no preparado | Ejecutar `python -m venv .venv` y despues `.\.venv\Scripts\python.exe -m pip install --require-hashes --no-deps -r python\requirements.lock` (Python 3.11, igual que CI). |
 | Renderer muestra fallback o IPC no responde | Se abrio en navegador o preload no cargo | Validar desde Electron levantado con `pnpm.cmd run dev`, no desde `http://localhost:5173` en navegador. |
 | `No hay carpeta sourcepad configurada` | No se guardo sourcepad | Ir a `Configuracion de Sourcepad`, elegir carpeta y guardar. |
 | `La ruta sourcepad guardada no existe o no es valida` | Carpeta movida, borrada o inaccesible | Guardar una ruta existente. Evitar editar `app.sqlite` salvo recuperacion manual controlada. |

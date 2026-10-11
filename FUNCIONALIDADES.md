@@ -1,5 +1,26 @@
 # Funcionalidades del Sistema — App Fotos Evento Deportivo
 
+> **Estado de implementación (2026-10).** Este documento es la especificación
+> original. Diferencias con lo que hoy hace la app:
+>
+> - **Modelos**: detector SCRFD-10G (pack antelopev2) + embeddings AdaFace IR-101
+>   (WebFace12M, ONNX). Si AdaFace no carga, se usa `glintr100` de antelopev2 como
+>   respaldo y se avisa al operador.
+> - **Captura de webcam**: se hace en el renderer (`getUserMedia`), no existe la
+>   acción Python `capture_frame`.
+> - **Impresión**: por el diálogo de impresión de Electron/Windows
+>   (`electron/print-service.js`), no por `win32print`. No existe `print_photo`.
+> - **Limpieza del índice**: canal IPC `index:clear` en Electron, no la acción
+>   Python `clear_index`. Se rechaza si hay un indexado en curso.
+> - **No implementado todavía**: `process_image` (A4 300 DPI, logo), las tablas
+>   `eventos` e `impresiones` y el historial de impresiones (`prints:history`).
+> - **Acciones Python reales**: `ping`, `index_photos`, `find_player` y
+>   `self_check` (solo para el smoke del binario empaquetado). Una acción
+>   desconocida devuelve error.
+> - **Canales IPC reales**: ver `ipcMain.handle(...)` en `electron/main.js`
+>   (`config:*`, `sourcepad:*`, `index:get-status`, `index:clear`, `print:send`,
+>   `player:*`, `photos:open-external`, `python:request`).
+
 ---
 
 ## Python Service (`python/main.py`)
