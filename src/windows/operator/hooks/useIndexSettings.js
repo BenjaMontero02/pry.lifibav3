@@ -3,11 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 const DEFAULT_FACE_SIZE_PX = 28;
 const DEFAULT_FACE_DET_SCORE = 0.50;
 const DEFAULT_MIN_FACE_QUALITY = 0;
+const DEFAULT_DETECTION_MODE = "standard";
 
 export default function useIndexSettings(desktopApi, activeView) {
   const [faceSizePx, setFaceSizePx] = useState(DEFAULT_FACE_SIZE_PX);
   const [faceDetScore, setFaceDetScore] = useState(DEFAULT_FACE_DET_SCORE);
   const [minFaceQuality, setMinFaceQuality] = useState(DEFAULT_MIN_FACE_QUALITY);
+  // "precise" suma una pasada del detector a 3072 px: mas caras chicas, analisis mas lento.
+  const [detectionMode, setDetectionMode] = useState(DEFAULT_DETECTION_MODE);
   // Cobertura de calidad del indice: {faces, withQuality, qualityBackend} o null.
   const [indexQuality, setIndexQuality] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -24,6 +27,7 @@ export default function useIndexSettings(desktopApi, activeView) {
         setFaceSizePx(result?.faceSizePx ?? DEFAULT_FACE_SIZE_PX);
         setFaceDetScore(result?.faceDetScore ?? DEFAULT_FACE_DET_SCORE);
         setMinFaceQuality(result?.minFaceQuality ?? DEFAULT_MIN_FACE_QUALITY);
+        setDetectionMode(result?.detectionMode ?? DEFAULT_DETECTION_MODE);
         setIndexQuality(result?.indexQuality ?? null);
       } catch {
         if (active) {
@@ -57,7 +61,12 @@ export default function useIndexSettings(desktopApi, activeView) {
     setStatus({ type: "idle", message: "" });
 
     try {
-      await desktopApi.invoke("config:set-index-settings", { faceSizePx, faceDetScore, minFaceQuality });
+      await desktopApi.invoke("config:set-index-settings", {
+        faceSizePx,
+        faceDetScore,
+        minFaceQuality,
+        detectionMode
+      });
       setStatus({
         type: "success",
         message:
@@ -71,12 +80,13 @@ export default function useIndexSettings(desktopApi, activeView) {
     } finally {
       setSaving(false);
     }
-  }, [desktopApi, faceSizePx, faceDetScore, minFaceQuality]);
+  }, [desktopApi, faceSizePx, faceDetScore, minFaceQuality, detectionMode]);
 
   return {
     faceSizePx,
     faceDetScore,
     minFaceQuality,
+    detectionMode,
     indexQuality,
     loading,
     saving,
@@ -84,6 +94,7 @@ export default function useIndexSettings(desktopApi, activeView) {
     setFaceSizePx,
     setFaceDetScore,
     setMinFaceQuality,
+    setDetectionMode,
     handleSave
   };
 }

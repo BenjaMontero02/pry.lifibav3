@@ -470,6 +470,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
       }
       const retriedText = stats.retriedPhotos > 0 ? `, ${stats.retriedPhotos} reintentadas` : "";
       const rebuiltText = stats.indexRebuilt ? " Se reanalizo todo el catalogo." : "";
+      const modeText = response?.result?.detectionMode === "precise" ? " (deteccion precisa)" : "";
       // Si AdaFace no cargo, Python cae a InsightFace: funciona pero con menos
       // precision, y el operador tiene que enterarse.
       const fallbackReason = response?.result?.embeddingBackendFallback;
@@ -477,7 +478,7 @@ export default function usePhotos({ desktopApi, activeView, persistedPath, onInd
         ? ` Atencion: se uso el modelo de respaldo porque el principal no cargo (${fallbackReason}).`
         : "";
       setIndexingMessage(
-        `Analisis completo: ${stats.processedPhotos} fotos revisadas${retriedText}, ` +
+        `Analisis completo${modeText}: ${stats.processedPhotos} fotos revisadas${retriedText}, ` +
           `${stats.newFacesIndexed} rostros encontrados.${rebuiltText}${fallbackText}`
       );
       if (stats.indexRebuilt) {

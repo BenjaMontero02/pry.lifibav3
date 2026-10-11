@@ -1119,6 +1119,11 @@ body {
   accent-color: var(--accent);
 }
 
+/* En Ajustes el toggle va entre sliders: necesita aire antes del siguiente label. */
+.settings-toggle {
+  margin: 1rem 0 1.25rem;
+}
+
 @media (max-width: 900px) {
   .scan-tuning {
     grid-template-columns: minmax(0, 1fr);

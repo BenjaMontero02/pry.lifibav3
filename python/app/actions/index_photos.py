@@ -8,9 +8,13 @@ import numpy as np
 from app.errors import describe_error_with_origin
 from app.progress import write_progress_event
 from app.services.face_index_service import (
+    DETECTION_MODE_PRECISE,
+    DETECTION_MODE_STANDARD,
     DETECTION_SIZE,
     LARGE_IMAGE_DETECTION_SIZE,
     LARGE_IMAGE_MIN_SIDE,
+    PRECISE_IMAGE_DETECTION_SIZE,
+    PRECISE_IMAGE_MIN_SIDE,
     create_empty_index,
     detect_faces,
     extract_face_embedding_with_quality,
@@ -152,11 +156,11 @@ def _is_signature_changed(existing, current_signature):
     )
 
 
-def _build_pipeline_fingerprint(min_face_size, min_det_score):
+def _build_pipeline_fingerprint(min_face_size, min_det_score, detection_mode=DETECTION_MODE_STANDARD):
     """Todo lo que cambia que caras entran al indice. Se guarda en el manifest:
     si difiere del de la corrida anterior, el indice se reconstruye (antes
     cambiar los ajustes solo afectaba a fotos nuevas)."""
-    return {
+    fingerprint = {
         "version": PIPELINE_VERSION,
         "embeddingModel": get_face_model_name(),
         "detectionSize": list(DETECTION_SIZE),
@@ -165,6 +169,13 @@ def _build_pipeline_fingerprint(min_face_size, min_det_score):
         "minFaceSizePx": int(min_face_size),
         "minFaceDetScore": round(float(min_det_score), 4),
     }
+    # Solo el modo preciso agrega claves: el fingerprint estandar queda igual
+    # al de versiones anteriores y actualizar la app no fuerza un reindexado.
+    if detection_mode == DETECTION_MODE_PRECISE:
+        fingerprint["detectionMode"] = DETECTION_MODE_PRECISE
+        fingerprint["preciseImageDetectionSize"] = list(PRECISE_IMAGE_DETECTION_SIZE)
+        fingerprint["preciseImageMinSide"] = PRECISE_IMAGE_MIN_SIDE
+    return fingerprint
 
 
 def _can_skip_photo(existing_state, signature):
@@ -406,6 +417,12 @@ def index_photos(data, request_id):
     if not (0.0 < min_det_score <= 1.0):
         min_det_score = DEFAULT_MIN_FACE_DET_SCORE
 
+    detection_mode = (
+        DETECTION_MODE_PRECISE
+        if data.get("detectionMode") == DETECTION_MODE_PRECISE
+        else DETECTION_MODE_STANDARD
+    )
+
     file_signatures = {}
     for photo_path in photo_paths:
         try:
@@ -416,7 +433,7 @@ def index_photos(data, request_id):
             continue
     photo_paths = [photo_path for photo_path in photo_paths if photo_path in file_signatures]
 
-    pipeline_fingerprint = _build_pipeline_fingerprint(min_face_size, min_det_score)
+    pipeline_fingerprint = _build_pipeline_fingerprint(min_face_size, min_det_score, detection_mode)
 
     index_exists = os.path.exists(index_path)
     vectors_exists = os.path.exists(vectors_path)
@@ -698,7 +715,9 @@ def index_photos(data, request_id):
 
                 # El detector ya descarta las caras bajo min_det_score; el filtro de
                 # calidad queda para el tamano minimo.
-                candidates = detect_faces(image, min(CALIBRATION_DETECTION_FLOOR, min_det_score))
+                candidates = detect_faces(
+                    image, min(CALIBRATION_DETECTION_FLOOR, min_det_score), detection_mode
+                )
                 faces = []
                 for face in candidates:
                     det_scores_seen.append(float(face.det_score))
@@ -878,6 +897,7 @@ def index_photos(data, request_id):
         "manifestPath": manifest_path,
         "rebuildReason": rebuild_reason,
         "pipeline": pipeline_fingerprint,
+        "detectionMode": detection_mode,
         "embeddingBackend": get_embedding_backend(),
         "embeddingModel": get_face_model_name(),
         # None salvo que se pidio AdaFace y no se pudo usar: ahi trae el motivo.

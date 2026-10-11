@@ -84,6 +84,7 @@ export default function App() {
               faceSizePx={indexSettings.faceSizePx}
               faceDetScore={indexSettings.faceDetScore}
               minFaceQuality={indexSettings.minFaceQuality}
+              detectionMode={indexSettings.detectionMode}
               indexQuality={indexSettings.indexQuality}
               indexLoading={indexSettings.loading}
               indexSaving={indexSettings.saving}
@@ -91,6 +92,7 @@ export default function App() {
               onFaceSizePxChange={indexSettings.setFaceSizePx}
               onFaceDetScoreChange={indexSettings.setFaceDetScore}
               onMinFaceQualityChange={indexSettings.setMinFaceQuality}
+              onDetectionModeChange={indexSettings.setDetectionMode}
               onIndexSettingsSave={indexSettings.handleSave}
             />
           ) : activeView === "photos" ? (

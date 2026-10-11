@@ -11,7 +11,7 @@ def test_interrupted_run_saves_progress_before_raising(tmp_path, monkeypatch):
     monkeypatch.setattr(index_photos_module, "get_embedding_backend_fallback", lambda: None)
     monkeypatch.setattr(index_photos_module, "get_face_analyzer", lambda: None)
 
-    def interrupted_detection(_image, _threshold):
+    def interrupted_detection(_image, _threshold, _mode="standard"):
         raise KeyboardInterrupt()
 
     monkeypatch.setattr(index_photos_module, "detect_faces", interrupted_detection)

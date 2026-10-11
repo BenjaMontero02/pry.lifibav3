@@ -46,7 +46,7 @@ const browserDesktopApi = {
       return { canceled: true, value: null };
     }
     if (channel === "config:get-index-settings") {
-      return { faceSizePx: 28, faceDetScore: 0.50, minFaceQuality: 0, indexQuality: null };
+      return { faceSizePx: 28, faceDetScore: 0.50, minFaceQuality: 0, detectionMode: "standard", indexQuality: null };
     }
     if (channel === "config:set-index-settings") {
       return {

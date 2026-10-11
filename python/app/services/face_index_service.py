@@ -100,6 +100,18 @@ LARGE_IMAGE_DETECTION_SIZE = (2048, 2048)
 # Lado mayor (px) a partir del cual se agrega la pasada grande.
 LARGE_IMAGE_MIN_SIDE = 1600
 
+# Modo "preciso" (opcional, Ajustes): pasada extra a 3072 en fotos de camara.
+# En una foto de 6000 px la pasada 2048 deja una cara de 30 px en ~10 px, el
+# limite de SCRFD; a 3072 queda en ~15 px. La deteccion tarda ~3x; el analisis
+# completo, 1.5-3x segun cuantas caras haya (los embeddings no cambian).
+# Se usa el mismo detector: el SCRFD-34G con landmarks no existe oficialmente y
+# el de terceros solo acepta 640 px (peor que las pasadas actuales).
+DETECTION_MODE_STANDARD = "standard"
+DETECTION_MODE_PRECISE = "precise"
+PRECISE_IMAGE_DETECTION_SIZE = (3072, 3072)
+# Por debajo de esto la pasada 3072 solo agranda la foto: no suma caras.
+PRECISE_IMAGE_MIN_SIDE = 2400
+
 _face_analyzer = None
 
 
@@ -297,14 +309,18 @@ def get_face_analyzer():
     return _face_analyzer
 
 
-def detection_sizes_for(image):
+def detection_sizes_for(image, detection_mode=DETECTION_MODE_STANDARD):
     height, width = image.shape[:2]
-    if max(height, width) >= LARGE_IMAGE_MIN_SIDE:
-        return [DETECTION_SIZE, LARGE_IMAGE_DETECTION_SIZE]
-    return [DETECTION_SIZE]
+    longest_side = max(height, width)
+    sizes = [DETECTION_SIZE]
+    if longest_side >= LARGE_IMAGE_MIN_SIDE:
+        sizes.append(LARGE_IMAGE_DETECTION_SIZE)
+    if detection_mode == DETECTION_MODE_PRECISE and longest_side >= PRECISE_IMAGE_MIN_SIDE:
+        sizes.append(PRECISE_IMAGE_DETECTION_SIZE)
+    return sizes
 
 
-def detect_faces(image_bgr, det_thresh):
+def detect_faces(image_bgr, det_thresh, detection_mode=DETECTION_MODE_STANDARD):
     """Detecta caras (bbox, kps, det_score) sin correr ningun otro modelo.
 
     Llama al detector directamente en vez de ``FaceAnalysis.get``: ``get``
@@ -314,7 +330,9 @@ def detect_faces(image_bgr, det_thresh):
     """
     det_model = get_face_analyzer().det_model
     det_model.det_thresh = float(det_thresh)
-    bboxes, kpss = det_model.detect(image_bgr, input_size=detection_sizes_for(image_bgr))
+    bboxes, kpss = det_model.detect(
+        image_bgr, input_size=detection_sizes_for(image_bgr, detection_mode)
+    )
 
     faces = []
     for position in range(bboxes.shape[0]):

@@ -43,7 +43,7 @@ def _patch_index_models(monkeypatch, qualities):
     monkeypatch.setattr(
         index_photos_module,
         "detect_faces",
-        lambda _image, _threshold: [_FakeFace([0, 0, 60, 60]), _FakeFace([100, 0, 170, 70])],
+        lambda _image, _threshold, _mode="standard": [_FakeFace([0, 0, 60, 60]), _FakeFace([100, 0, 170, 70])],
     )
     calls = iter(qualities)
 

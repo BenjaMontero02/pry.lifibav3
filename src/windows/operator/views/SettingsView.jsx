@@ -13,6 +13,7 @@ export default function SettingsView({
   faceSizePx,
   faceDetScore,
   minFaceQuality,
+  detectionMode,
   indexQuality,
   indexLoading,
   indexSaving,
@@ -20,6 +21,7 @@ export default function SettingsView({
   onFaceSizePxChange,
   onFaceDetScoreChange,
   onMinFaceQualityChange,
+  onDetectionModeChange,
   onIndexSettingsSave
 }) {
   return (
@@ -115,6 +117,19 @@ export default function SettingsView({
             <span>0.05 (menos preciso)</span>
             <span>0.99 (mas preciso)</span>
           </div>
+
+          <label className="scan-tuning-toggle settings-toggle">
+            <input
+              type="checkbox"
+              checked={detectionMode === "precise"}
+              onChange={(event) => onDetectionModeChange(event.target.checked ? "precise" : "standard")}
+            />
+            <span>
+              Deteccion precisa (mas lenta): en fotos grandes agrega una pasada a mayor resolucion para encontrar
+              caras mas chicas o lejanas. El analisis tarda mas (en pruebas, entre 1,5 y 3 veces). Al cambiarlo, el proximo
+              "Actualizar fotos" vuelve a analizar todo el catalogo.
+            </span>
+          </label>
 
           <label className="field-label" htmlFor="min-face-quality-slider">
             Calidad minima de rostro en resultados ({minFaceQuality > 0 ? minFaceQuality.toFixed(1) : "desactivada"})

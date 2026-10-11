@@ -63,6 +63,10 @@ const INDEX_FACE_DET_SCORE_CONFIG_KEY = "index.faceDetScore";
 // Calidad minima (norma AdaFace) de las caras que puede devolver una busqueda. 0 = apagado.
 const INDEX_MIN_FACE_QUALITY_CONFIG_KEY = "index.minFaceQuality";
 const MIN_FACE_QUALITY_MAX = 30;
+// "precise" agrega una pasada del detector a mayor resolucion en fotos grandes:
+// encuentra caras mas chicas a cambio de un analisis 1.5-3 veces mas lento.
+const INDEX_DETECTION_MODE_CONFIG_KEY = "index.detectionMode";
+const DETECTION_MODES = ["standard", "precise"];
 const SOURCE_PHOTO_SCHEME = "sourcephoto";
 const SOURCE_THUMB_SCHEME = "sourcethumb";
 const PHOTO_INDEX_STATUS_TABLE = "photo_index_status";
@@ -1764,10 +1768,12 @@ function registerIpc() {
     const faceSizePx = getConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY);
     const faceDetScore = getConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY);
     const minFaceQuality = Number(getConfigurationValue(INDEX_MIN_FACE_QUALITY_CONFIG_KEY));
+    const detectionMode = getConfigurationValue(INDEX_DETECTION_MODE_CONFIG_KEY);
     return {
       faceSizePx: faceSizePx !== null ? Number(faceSizePx) : 28,
       faceDetScore: faceDetScore !== null ? Number(faceDetScore) : 0.50,
       minFaceQuality: Number.isFinite(minFaceQuality) && minFaceQuality > 0 ? minFaceQuality : 0,
+      detectionMode: DETECTION_MODES.includes(detectionMode) ? detectionMode : "standard",
       indexQuality: await readIndexQualityCoverage()
     };
   });
@@ -1784,12 +1790,14 @@ function registerIpc() {
     const minFaceQuality = payload?.minFaceQuality != null && Number.isFinite(requestedQuality)
       ? Math.max(0, Math.min(MIN_FACE_QUALITY_MAX, Number(requestedQuality.toFixed(1))))
       : 0;
+    const detectionMode = DETECTION_MODES.includes(payload?.detectionMode) ? payload.detectionMode : "standard";
 
     setConfigurationValue(INDEX_FACE_SIZE_CONFIG_KEY, String(faceSizePx));
     setConfigurationValue(INDEX_FACE_DET_SCORE_CONFIG_KEY, String(faceDetScore));
     setConfigurationValue(INDEX_MIN_FACE_QUALITY_CONFIG_KEY, String(minFaceQuality));
+    setConfigurationValue(INDEX_DETECTION_MODE_CONFIG_KEY, detectionMode);
 
-    return { faceSizePx, faceDetScore, minFaceQuality };
+    return { faceSizePx, faceDetScore, minFaceQuality, detectionMode };
   });
 
   ipcMain.handle("config:pick-source-path", async () => {
@@ -1991,6 +1999,9 @@ function registerIpc() {
       }
       if (faceDetScore !== null) {
         extra.minFaceDetScore = Number(faceDetScore);
+      }
+      if (getConfigurationValue(INDEX_DETECTION_MODE_CONFIG_KEY) === "precise") {
+        extra.detectionMode = "precise";
       }
     }
     if (action === "find_player") {
