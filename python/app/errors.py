@@ -41,3 +41,14 @@ def describe_error_with_origin(error):
     if not origin:
         return described
     return "{described}\n{origin}".format(described=described, origin=origin)
+
+
+class UnsupportedActionError(ValueError):
+    """Accion que el router no conoce. Es un error, nunca una respuesta exitosa."""
+
+
+class ArtifactWriteError(RuntimeError):
+    """Un archivo del indice no se pudo guardar (disco lleno, permisos, red).
+
+    El mensaje ya viene redactado para el operador: describe_error lo muestra tal cual.
+    """

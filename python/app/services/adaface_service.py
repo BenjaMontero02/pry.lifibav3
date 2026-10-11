@@ -91,3 +91,8 @@ def session_ok():
     que es lo que hay que verificar sobre un binario ya empaquetado.
     """
     return _get_session() is not None
+
+
+def session_error():
+    """Motivo por el que la sesion no cargo (None si no hubo error o no se intento)."""
+    return _session_error

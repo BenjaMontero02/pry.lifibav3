@@ -14,6 +14,7 @@ from app.services.face_index_service import (
     ALLOWED_MODULES,
     DETECTION_MODEL_NAME,
     get_embedding_backend,
+    get_embedding_backend_fallback,
     get_face_analyzer,
     get_face_model_name,
     redirect_stdout_to_stderr,
@@ -49,6 +50,8 @@ def self_check(_data=None, _request_id=None):
         "detectionModelName": DETECTION_MODEL_NAME,
         "detectionModelDir": analyzer.model_dir,
         "embeddingBackend": get_embedding_backend(),
+        # None cuando se uso AdaFace; si no, el motivo por el que se cayo a InsightFace.
+        "embeddingBackendFallback": get_embedding_backend_fallback(),
         "faceModelName": get_face_model_name(),
         "adafaceModelPresent": adaface_service.is_available(),
         "adafaceSessionOk": adaface_service.session_ok(),

@@ -20,20 +20,31 @@ DETECTION_MODEL_NAME = "antelopev2"
 # ``get_face_model_name()`` viaja al manifest del indice: cambiar de backend dispara
 # el rebuild automatico (embedding_model_changed) en index_photos.
 def _resolve_embedding_backend():
+    global _embedding_backend_fallback
+
     from app.services import adaface_service
 
     requested = os.environ.get("LIFIBA_EMBEDDING_BACKEND", "adaface").strip().lower()
     if requested == "adaface":
-        if adaface_service.is_available():
+        # No alcanza con que exista el archivo: la sesion ONNX tiene que cargar.
+        # Si no carga, las caras se embeben con InsightFace y se avisa.
+        if not adaface_service.is_available():
+            reason = "falta el archivo del modelo AdaFace"
+        elif adaface_service.session_ok():
             return "adaface"
+        else:
+            reason = adaface_service.session_error() or "la sesion ONNX no cargo"
+        _embedding_backend_fallback = reason
         sys.stderr.write(
-            "AdaFace backend requested but model file is missing; "
-            "falling back to insightface embeddings.\n"
+            "AVISO: AdaFace no disponible ({reason}); se usan embeddings de InsightFace. "
+            "El indice se reconstruye con ese modelo.\n".format(reason=reason)
         )
     return "insightface"
 
 
 EMBEDDING_BACKEND = None
+# Motivo por el que se pidio AdaFace y no se pudo usar (None si no hubo fallback).
+_embedding_backend_fallback = None
 
 
 def get_embedding_backend():
@@ -41,6 +52,12 @@ def get_embedding_backend():
     if EMBEDDING_BACKEND is None:
         EMBEDDING_BACKEND = _resolve_embedding_backend()
     return EMBEDDING_BACKEND
+
+
+def get_embedding_backend_fallback():
+    """Motivo del fallback a InsightFace, o None. Resuelve el backend si hace falta."""
+    get_embedding_backend()
+    return _embedding_backend_fallback
 
 
 # Sufijo del pipeline de embedding. Va dentro del nombre de modelo que se guarda
@@ -152,6 +169,12 @@ def is_id_mapped_index(index):
     except Exception:
         candidate = index
     return isinstance(candidate, (faiss.IndexIDMap, faiss.IndexIDMap2))
+
+
+def get_index_ids(index):
+    """Ids guardados en un IndexIDMap/IDMap2 (los mismos que devuelve search)."""
+    candidate = faiss.downcast_index(index)
+    return {int(value) for value in faiss.vector_to_array(candidate.id_map)}
 
 
 def load_index(index_path):

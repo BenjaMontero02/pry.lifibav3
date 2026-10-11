@@ -1,6 +1,7 @@
 from app.actions.index_photos import index_photos
 from app.actions.find_player import find_player
 from app.actions.self_check import self_check
+from app.errors import UnsupportedActionError
 
 
 def handle_action(action, data, request_id):
@@ -12,4 +13,4 @@ def handle_action(action, data, request_id):
         return find_player(data, request_id)
     if action == "self_check":
         return self_check(data, request_id)
-    return {"message": "unknown-action", "action": action, "data": data}
+    raise UnsupportedActionError(f"Accion desconocida para el backend Python: {action!r}")

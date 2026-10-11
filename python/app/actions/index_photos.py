@@ -15,8 +15,11 @@ from app.services.face_index_service import (
     detect_faces,
     extract_face_embedding,
     face_size_px,
+    get_embedding_backend,
+    get_embedding_backend_fallback,
     get_face_analyzer,
     get_face_model_name,
+    get_index_ids,
     is_id_mapped_index,
     load_index,
     save_index,
@@ -25,18 +28,23 @@ from app.services.file_service import (
     file_signature,
     list_event_photos,
     load_json_file_with_status,
-    save_json_file_if_changed,
+    remove_stale_temp_files,
+    save_json_file,
 )
 from app.services.image_service import read_image_bgr
+from app.services.index_location import index_artifact_paths, resolve_index_dir
 
-SAVE_CHECKPOINT_EVERY = 25
+# Los checkpoints se guardan por tiempo, no por cantidad de fotos: cada guardado
+# reserializa el indice FAISS completo, y con cada 25 fotos el costo crecia
+# cuadraticamente con el tamano del catalogo. Un corte pierde como mucho este lapso.
+SAVE_CHECKPOINT_INTERVAL_SECONDS = 30
 # Cuantos tracebacks completos se escriben a stderr por corrida. Cuando falla
 # cada foto por la misma causa (modelo ausente, backend roto) uno alcanza; el
 # resto solo inflaria el log del bridge.
 STDERR_TRACEBACK_LIMIT = 3
 PROGRESS_EVENT_EVERY = 25
 PROGRESS_VERBOSE_LIMIT = 50
-ALWAYS_EMIT_PROGRESS_STATUSES = {"error", "missing_file", "unreadable"}
+ALWAYS_EMIT_PROGRESS_STATUSES = {"error", "unreadable"}
 
 # Version de la logica de indexado. Subirla cuando un cambio de codigo altere
 # que caras se detectan o como se embeben: fuerza un rebuild en el proximo scan.
@@ -53,6 +61,11 @@ SKIPPABLE_STATUSES = {"indexed", "no_faces", "faces_filtered"}
 # ~30-45px and in profile (profiles score lower on detection confidence).
 DEFAULT_MIN_FACE_SIZE_PX = 28
 DEFAULT_MIN_FACE_DET_SCORE = 0.50
+
+# Piso con el que se pide el detector solo para el log de calibracion, asi se
+# cuentan las caras que quedan bajo el umbral. El NMS es greedy por score: las
+# caras por encima del umbral salen identicas, y el filtro se aplica aca.
+CALIBRATION_DETECTION_FLOOR = 0.20
 
 
 def _passes_quality_filter(face, min_face_size=None, min_det_score=None):
@@ -115,18 +128,6 @@ def _write_photo_progress(
     if error is not None:
         payload["error"] = str(error)
     write_progress_event(request_id, payload)
-
-
-def _resolve_index_dir(data):
-    runtime = (data or {}).get("__runtime", {})
-    index_dir = runtime.get("indexDir")
-    if index_dir:
-        return index_dir
-
-    app_data_path = runtime.get("appDataPath")
-    if not app_data_path:
-        raise ValueError("Missing runtime indexDir/appDataPath for index_photos action.")
-    return os.path.join(app_data_path, "face-index")
 
 
 def _resolve_source_path(data):
@@ -269,6 +270,39 @@ def _resolve_next_face_id(manifest, vectors):
     return max(next_face_id, max_existing_id + 1)
 
 
+def _reconcile_index_with_vectors(index, vectors, photos_state):
+    """Reconcilia por id el IndexIDMap2 con vectors.json despues de un corte.
+
+    Cada archivo se reemplaza atomicamente, pero el conjunto no: si el proceso
+    muere entre dos escrituras, quedan ids huerfanos en el indice y filas
+    huerfanas en vectors.json. Se descartan los huerfanos de cada lado y las
+    fotos que perdieron vectores salen del manifest, asi se reprocesan. Es
+    mucho mas barato que reconstruir el catalogo entero.
+
+    Devuelve ``(filas_validas, ids_huerfanos_en_indice, filas_huerfanas, fotos_afectadas)``.
+    """
+    index_ids = get_index_ids(index)
+    kept_rows = []
+    kept_ids = set()
+    orphan_rows = []
+    for vector_row in vectors:
+        row_id = vector_row["id"]
+        if row_id in index_ids and row_id not in kept_ids:
+            kept_rows.append(vector_row)
+            kept_ids.add(row_id)
+        else:
+            orphan_rows.append(vector_row)
+
+    orphan_index_ids = index_ids - kept_ids
+    if orphan_index_ids:
+        index.remove_ids(np.asarray(sorted(orphan_index_ids), dtype=np.int64))
+
+    affected_paths = {vector_row.get("photo_path") for vector_row in orphan_rows}
+    for photo_path in affected_paths:
+        photos_state.pop(photo_path, None)
+    return kept_rows, len(orphan_index_ids), len(orphan_rows), affected_paths
+
+
 def _save_dirty_artifacts(
     index,
     vectors,
@@ -280,28 +314,58 @@ def _save_dirty_artifacts(
     dirty_vectors,
     dirty_manifest,
 ):
+    # Solo se llega aca con el flag dirty: se escribe directo. Releer el archivo
+    # para comparar duplicaba el costo de cada checkpoint.
     writes = {"index": False, "vectors": False, "manifest": False}
     if dirty_index:
         save_index(index, index_path)
         writes["index"] = True
     if dirty_vectors:
-        writes["vectors"] = save_json_file_if_changed(vectors_path, vectors)
+        save_json_file(vectors_path, vectors)
+        writes["vectors"] = True
     if dirty_manifest:
-        writes["manifest"] = save_json_file_if_changed(manifest_path, manifest)
+        save_json_file(manifest_path, manifest)
+        writes["manifest"] = True
     return writes
+
+
+def _log_detection_calibration(
+    det_scores, below_threshold, small_faces, accepted, min_det_score, min_face_size
+):
+    """Una linea con la distribucion de det_score de la corrida, para calibrar umbrales."""
+    if det_scores:
+        scores = np.asarray(det_scores, dtype=np.float64)
+        p10, p50, p90 = np.percentile(scores, [10, 50, 90])
+        spread = "min={:.2f} p10={:.2f} p50={:.2f} p90={:.2f} max={:.2f}".format(
+            scores.min(), p10, p50, p90, scores.max()
+        )
+    else:
+        spread = "min=- p10=- p50=- p90=- max=-"
+    sys.stderr.write(
+        "[face-calibration] index caras={total} {spread} bajo_umbral={below} "
+        "(umbral={thr:.2f} piso={floor:.2f}) chicas={small} (min={size}px) aceptadas={acc}\n".format(
+            total=len(det_scores),
+            spread=spread,
+            below=below_threshold,
+            thr=min_det_score,
+            floor=min(CALIBRATION_DETECTION_FLOOR, min_det_score),
+            small=small_faces,
+            size=min_face_size,
+            acc=accepted,
+        )
+    )
 
 
 def index_photos(data, request_id):
     data = data or {}
-    index_dir = _resolve_index_dir(data)
+    index_dir = resolve_index_dir(data, "index_photos")
     os.makedirs(index_dir, exist_ok=True)
+    remove_stale_temp_files(index_dir)
 
     source_path = _resolve_source_path(data)
     photo_paths = list_event_photos(source_path)
 
-    index_path = os.path.join(index_dir, "faces.faiss")
-    vectors_path = os.path.join(index_dir, "vectors.json")
-    manifest_path = os.path.join(index_dir, "photos_manifest.json")
+    index_path, vectors_path, manifest_path = index_artifact_paths(index_dir)
 
     force_reindex = bool(data.get("forceReindex", False))
 
@@ -319,8 +383,9 @@ def index_photos(data, request_id):
             file_signatures[photo_path] = file_signature(photo_path)
         except OSError:
             # Borrada entre el listado y el stat, sin permisos, disco de red
-            # caido: se reporta como missing_file sin abortar la corrida.
+            # caido: se trata como removida (sus vectores salen del indice).
             continue
+    photo_paths = [photo_path for photo_path in photo_paths if photo_path in file_signatures]
 
     pipeline_fingerprint = _build_pipeline_fingerprint(min_face_size, min_det_score)
 
@@ -347,10 +412,10 @@ def index_photos(data, request_id):
 
     index = None
     if rebuild_reason is None:
+        # Que el ntotal coincida con vectors.json no se chequea aca: las
+        # diferencias se reconcilian por id mas abajo.
         try:
             index = load_index(index_path)
-            if index.ntotal != len(vectors):
-                rebuild_reason = "index_metadata_mismatch"
         except Exception:
             rebuild_reason = "index_load_error"
 
@@ -408,6 +473,20 @@ def index_photos(data, request_id):
         manifest["pipeline"] = pipeline_fingerprint
         dirty_manifest = True
 
+    # Un corte entre dos escrituras deja indice y vectors.json desfasados: se
+    # reconcilian por id antes de decidir que fotos reprocesar.
+    orphan_index_ids_removed = 0
+    orphan_vector_rows_removed = 0
+    if rebuild_reason is None:
+        vectors, orphan_index_ids_removed, orphan_vector_rows_removed, _affected = (
+            _reconcile_index_with_vectors(index, vectors, photos_state)
+        )
+        if orphan_index_ids_removed:
+            dirty_index = True
+        if orphan_vector_rows_removed:
+            dirty_vectors = True
+            dirty_manifest = True
+
     # Fotos que esta corrida va a (re)procesar. El loop y la carga del modelo
     # usan este mismo conjunto: si discreparan, una foto a reintentar llegaria
     # al loop sin detector cargado.
@@ -415,13 +494,10 @@ def index_photos(data, request_id):
         paths_to_process = {
             photo_path
             for photo_path in photo_paths
-            if file_signatures.get(photo_path) is not None
-            and not _can_skip_photo(photos_state.get(photo_path), file_signatures[photo_path])
+            if not _can_skip_photo(photos_state.get(photo_path), file_signatures[photo_path])
         }
     else:
-        paths_to_process = {
-            photo_path for photo_path in photo_paths if file_signatures.get(photo_path) is not None
-        }
+        paths_to_process = set(photo_paths)
 
     # Incremental removal: drop stale vectors from the IDMap2 index instead of
     # rebuilding everything. Stale = photo no longer in the folder, or photo
@@ -485,6 +561,10 @@ def index_photos(data, request_id):
     unreadable_photos = 0
     failed_photos = 0
     artifact_write_counts = {"index": 0, "vectors": 0, "manifest": 0}
+    # Calibracion: det_score de cada cara que vio el detector, y las descartadas.
+    det_scores_seen = []
+    below_threshold_count = 0
+    small_faces_count = 0
 
     tracebacks_written = 0
 
@@ -495,10 +575,12 @@ def index_photos(data, request_id):
 
     started_at = time.time()
     processing_ms_total = 0.0
+    last_checkpoint_at = time.monotonic()
 
     def save_dirty_artifacts():
-        nonlocal dirty_index, dirty_vectors, dirty_manifest
+        nonlocal dirty_index, dirty_vectors, dirty_manifest, last_checkpoint_at
 
+        last_checkpoint_at = time.monotonic()
         if not (dirty_index or dirty_vectors or dirty_manifest):
             return
 
@@ -520,196 +602,201 @@ def index_photos(data, request_id):
         dirty_vectors = False
         dirty_manifest = False
 
-    for photo_path in photo_paths:
-        processed_photos += 1
-        signature = file_signatures.get(photo_path)
-        existing_state = photos_state.get(photo_path)
-        change_type = photo_changes["byPath"].get(photo_path, "new")
+    try:
+        for photo_path in photo_paths:
+            if time.monotonic() - last_checkpoint_at >= SAVE_CHECKPOINT_INTERVAL_SECONDS:
+                save_dirty_artifacts()
 
-        if signature is not None and photo_path not in paths_to_process:
-            skipped_existing += 1
-            skipped_unchanged_photos += 1
-            _write_photo_progress(
-                request_id,
-                processed_photos,
-                total_photos,
-                photo_path,
-                "skipped_existing",
-                0,
-                change_type,
-            )
-            continue
+            processed_photos += 1
+            signature = file_signatures[photo_path]
+            existing_state = photos_state.get(photo_path)
+            change_type = photo_changes["byPath"].get(photo_path, "new")
 
-        if signature is None:
-            failed_photos += 1
-            _write_photo_progress(
-                request_id,
-                processed_photos,
-                total_photos,
-                photo_path,
-                "missing_file",
-                0,
-                change_type,
-            )
-            continue
-
-        photos_processed_for_indexing += 1
-        if change_type == "new":
-            processed_new_photos += 1
-        elif change_type == "modified":
-            processed_modified_photos += 1
-        elif change_type == "unchanged":
-            reprocessed_unchanged_photos += 1
-        if (
-            rebuild_reason is None
-            and isinstance(existing_state, dict)
-            and existing_state.get("status") not in SKIPPABLE_STATUSES
-        ):
-            retried_photos += 1
-
-        photo_started_at = time.perf_counter()
-        try:
-            image = read_image_bgr(photo_path)
-            if image is None:
-                unreadable_photos += 1
-                photos_state[photo_path] = {
-                    "mtime_ns": signature["mtime_ns"],
-                    "size": signature["size"],
-                    "faces_detected": 0,
-                    "status": "unreadable",
-                    "error": "No se pudo decodificar la imagen (formato no soportado o archivo danado).",
-                    "indexed_at": int(time.time()),
-                }
-                dirty_manifest = True
+            if photo_path not in paths_to_process:
+                skipped_existing += 1
+                skipped_unchanged_photos += 1
                 _write_photo_progress(
                     request_id,
                     processed_photos,
                     total_photos,
                     photo_path,
-                    "unreadable",
+                    "skipped_existing",
                     0,
                     change_type,
                 )
-                if processed_photos % SAVE_CHECKPOINT_EVERY == 0:
-                    save_dirty_artifacts()
                 continue
 
-            # El detector ya descarta las caras bajo min_det_score; el filtro de
-            # calidad queda para el tamano minimo.
-            faces = detect_faces(image, min_det_score)
-            valid_embeddings = []
-            for face in faces:
-                if not _passes_quality_filter(face, min_face_size, min_det_score):
-                    faces_filtered_by_quality += 1
-                    continue
-                embedding = extract_face_embedding(image, face)
-                if embedding is None:
-                    faces_filtered_by_quality += 1
-                    continue
-                valid_embeddings.append(embedding)
-
-            faces_detected = len(valid_embeddings)
-            if faces_detected == 0:
-                # Distinguish "nothing detected" from "detections discarded by
-                # the quality gate" so the operator can tune the filter.
-                if faces:
-                    no_face_status = "faces_filtered"
-                    photos_with_only_filtered_faces += 1
-                else:
-                    no_face_status = "no_faces"
-                    photos_without_faces += 1
-                photos_state[photo_path] = {
-                    "mtime_ns": signature["mtime_ns"],
-                    "size": signature["size"],
-                    "faces_detected": 0,
-                    "status": no_face_status,
-                    "indexed_at": int(time.time()),
-                }
-                dirty_manifest = True
-                _write_photo_progress(
-                    request_id,
-                    processed_photos,
-                    total_photos,
-                    photo_path,
-                    no_face_status,
-                    0,
-                    change_type,
-                )
-                if processed_photos % SAVE_CHECKPOINT_EVERY == 0:
-                    save_dirty_artifacts()
-                continue
-
-            embedding_matrix = np.stack(valid_embeddings).astype(np.float32)
-            face_ids = list(range(next_face_id, next_face_id + faces_detected))
-            next_face_id += faces_detected
-            manifest["next_face_id"] = next_face_id
-            index.add_with_ids(embedding_matrix, np.asarray(face_ids, dtype=np.int64))
-            for face_ordinal, face_id in enumerate(face_ids):
-                vectors.append(
-                    {"id": face_id, "photo_path": photo_path, "face_ordinal": face_ordinal}
-                )
-
-            new_faces_indexed += faces_detected
-            if change_type in {"new", "modified"}:
-                faces_indexed_from_new_or_modified_photos += faces_detected
+            photos_processed_for_indexing += 1
+            if change_type == "new":
+                processed_new_photos += 1
+            elif change_type == "modified":
+                processed_modified_photos += 1
             elif change_type == "unchanged":
-                faces_reindexed_from_unchanged_photos += faces_detected
-            photos_state[photo_path] = {
-                "mtime_ns": signature["mtime_ns"],
-                "size": signature["size"],
-                "faces_detected": faces_detected,
-                "status": "indexed",
-                "indexed_at": int(time.time()),
-            }
-            dirty_index = True
-            dirty_vectors = True
-            dirty_manifest = True
-            _write_photo_progress(
-                request_id,
-                processed_photos,
-                total_photos,
-                photo_path,
-                "indexed",
-                faces_detected,
-                change_type,
-            )
-        except Exception as error:
-            failed_photos += 1
-            # El mensaje viaja al manifest -> photo_index_status.last_error -> UI,
-            # asi que tiene que bastar por si solo: tipo de excepcion (nunca
-            # vacio) y la frame donde revento.
-            described_error = describe_error_with_origin(error)
-            if tracebacks_written < STDERR_TRACEBACK_LIMIT:
-                tracebacks_written += 1
-                sys.stderr.write(
-                    "index_photos fallo en {path}:\n{trace}".format(
-                        path=photo_path, trace=traceback.format_exc()
-                    )
-                )
-            photos_state[photo_path] = {
-                "mtime_ns": signature["mtime_ns"],
-                "size": signature["size"],
-                "faces_detected": 0,
-                "status": "error",
-                "error": described_error,
-                "indexed_at": int(time.time()),
-            }
-            dirty_manifest = True
-            _write_photo_progress(
-                request_id,
-                processed_photos,
-                total_photos,
-                photo_path,
-                "error",
-                0,
-                change_type,
-                error=described_error,
-            )
-        finally:
-            processing_ms_total += (time.perf_counter() - photo_started_at) * 1000
+                reprocessed_unchanged_photos += 1
+            if (
+                rebuild_reason is None
+                and isinstance(existing_state, dict)
+                and existing_state.get("status") not in SKIPPABLE_STATUSES
+            ):
+                retried_photos += 1
 
-        if processed_photos % SAVE_CHECKPOINT_EVERY == 0:
+            photo_started_at = time.perf_counter()
+            try:
+                image = read_image_bgr(photo_path)
+                if image is None:
+                    unreadable_photos += 1
+                    photos_state[photo_path] = {
+                        "mtime_ns": signature["mtime_ns"],
+                        "size": signature["size"],
+                        "faces_detected": 0,
+                        "status": "unreadable",
+                        "error": "No se pudo decodificar la imagen (formato no soportado o archivo danado).",
+                        "indexed_at": int(time.time()),
+                    }
+                    dirty_manifest = True
+                    _write_photo_progress(
+                        request_id,
+                        processed_photos,
+                        total_photos,
+                        photo_path,
+                        "unreadable",
+                        0,
+                        change_type,
+                    )
+                    continue
+
+                # El detector ya descarta las caras bajo min_det_score; el filtro de
+                # calidad queda para el tamano minimo.
+                candidates = detect_faces(image, min(CALIBRATION_DETECTION_FLOOR, min_det_score))
+                faces = []
+                for face in candidates:
+                    det_scores_seen.append(float(face.det_score))
+                    if float(face.det_score) < min_det_score:
+                        below_threshold_count += 1
+                    else:
+                        faces.append(face)
+                valid_embeddings = []
+                for face in faces:
+                    if not _passes_quality_filter(face, min_face_size, min_det_score):
+                        faces_filtered_by_quality += 1
+                        if face_size_px(face) < min_face_size:
+                            small_faces_count += 1
+                        continue
+                    embedding = extract_face_embedding(image, face)
+                    if embedding is None:
+                        faces_filtered_by_quality += 1
+                        continue
+                    valid_embeddings.append(embedding)
+
+                faces_detected = len(valid_embeddings)
+                if faces_detected == 0:
+                    # Distinguish "nothing detected" from "detections discarded by
+                    # the quality gate" so the operator can tune the filter.
+                    if faces:
+                        no_face_status = "faces_filtered"
+                        photos_with_only_filtered_faces += 1
+                    else:
+                        no_face_status = "no_faces"
+                        photos_without_faces += 1
+                    photos_state[photo_path] = {
+                        "mtime_ns": signature["mtime_ns"],
+                        "size": signature["size"],
+                        "faces_detected": 0,
+                        "status": no_face_status,
+                        "indexed_at": int(time.time()),
+                    }
+                    dirty_manifest = True
+                    _write_photo_progress(
+                        request_id,
+                        processed_photos,
+                        total_photos,
+                        photo_path,
+                        no_face_status,
+                        0,
+                        change_type,
+                    )
+                    continue
+
+                embedding_matrix = np.stack(valid_embeddings).astype(np.float32)
+                face_ids = list(range(next_face_id, next_face_id + faces_detected))
+                next_face_id += faces_detected
+                manifest["next_face_id"] = next_face_id
+                index.add_with_ids(embedding_matrix, np.asarray(face_ids, dtype=np.int64))
+                for face_ordinal, face_id in enumerate(face_ids):
+                    vectors.append(
+                        {"id": face_id, "photo_path": photo_path, "face_ordinal": face_ordinal}
+                    )
+
+                new_faces_indexed += faces_detected
+                if change_type in {"new", "modified"}:
+                    faces_indexed_from_new_or_modified_photos += faces_detected
+                elif change_type == "unchanged":
+                    faces_reindexed_from_unchanged_photos += faces_detected
+                photos_state[photo_path] = {
+                    "mtime_ns": signature["mtime_ns"],
+                    "size": signature["size"],
+                    "faces_detected": faces_detected,
+                    "status": "indexed",
+                    "indexed_at": int(time.time()),
+                }
+                dirty_index = True
+                dirty_vectors = True
+                dirty_manifest = True
+                _write_photo_progress(
+                    request_id,
+                    processed_photos,
+                    total_photos,
+                    photo_path,
+                    "indexed",
+                    faces_detected,
+                    change_type,
+                )
+            except Exception as error:
+                failed_photos += 1
+                # El mensaje viaja al manifest -> photo_index_status.last_error -> UI,
+                # asi que tiene que bastar por si solo: tipo de excepcion (nunca
+                # vacio) y la frame donde revento.
+                described_error = describe_error_with_origin(error)
+                if tracebacks_written < STDERR_TRACEBACK_LIMIT:
+                    tracebacks_written += 1
+                    sys.stderr.write(
+                        "index_photos fallo en {path}:\n{trace}".format(
+                            path=photo_path, trace=traceback.format_exc()
+                        )
+                    )
+                photos_state[photo_path] = {
+                    "mtime_ns": signature["mtime_ns"],
+                    "size": signature["size"],
+                    "faces_detected": 0,
+                    "status": "error",
+                    "error": described_error,
+                    "indexed_at": int(time.time()),
+                }
+                dirty_manifest = True
+                _write_photo_progress(
+                    request_id,
+                    processed_photos,
+                    total_photos,
+                    photo_path,
+                    "error",
+                    0,
+                    change_type,
+                    error=described_error,
+                )
+            finally:
+                processing_ms_total += (time.perf_counter() - photo_started_at) * 1000
+    except BaseException:
+        # Corte (Ctrl+C, cierre del proceso): se guarda lo ya indexado para no
+        # rehacerlo. Si el guardado tambien falla, manda el error original.
+        try:
             save_dirty_artifacts()
+        except Exception as save_error:
+            sys.stderr.write(
+                "index_photos: no se pudo guardar el avance al interrumpir: {error}\n".format(
+                    error=save_error
+                )
+            )
+        raise
 
     if total_photos == 0:
         _write_photo_progress(
@@ -724,6 +811,15 @@ def index_photos(data, request_id):
         )
 
     save_dirty_artifacts()
+
+    _log_detection_calibration(
+        det_scores_seen,
+        below_threshold_count,
+        small_faces_count,
+        new_faces_indexed,
+        min_det_score,
+        min_face_size,
+    )
 
     elapsed_ms = int((time.time() - started_at) * 1000)
     current_status_counts = _count_current_manifest_statuses(photo_paths, photos_state)
@@ -740,6 +836,10 @@ def index_photos(data, request_id):
         "manifestPath": manifest_path,
         "rebuildReason": rebuild_reason,
         "pipeline": pipeline_fingerprint,
+        "embeddingBackend": get_embedding_backend(),
+        "embeddingModel": get_face_model_name(),
+        # None salvo que se pidio AdaFace y no se pudo usar: ahi trae el motivo.
+        "embeddingBackendFallback": get_embedding_backend_fallback(),
         "stats": {
             "processedPhotos": processed_photos,
             "totalPhotos": total_photos,
@@ -761,6 +861,8 @@ def index_photos(data, request_id):
             "removedPhotosDetected": photo_changes["removedPhotos"],
             "photosRemovedFromManifest": photo_changes["removedPhotos"],
             "facesRemovedFromIndex": faces_removed_from_index,
+            "orphanIndexIdsRemoved": orphan_index_ids_removed,
+            "orphanVectorRowsRemoved": orphan_vector_rows_removed,
             "newFacesIndexed": new_faces_indexed,
             "facesIndexed": new_faces_indexed,
             "facesIndexedFromNewOrModifiedPhotos": faces_indexed_from_new_or_modified_photos,

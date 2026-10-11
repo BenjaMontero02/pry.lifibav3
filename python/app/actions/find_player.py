@@ -2,6 +2,7 @@ import base64
 import binascii
 import math
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -15,6 +16,7 @@ from app.services.face_index_service import (
     normalize_embedding,
 )
 from app.services.file_service import load_json_file
+from app.services.index_location import index_artifact_paths, resolve_index_dir
 
 # Mismo default que la UI (useScanPlayer.js). No esta calibrado con fotos
 # reales de un evento: ajustarlo desde el control de la pantalla Escanear.
@@ -25,6 +27,8 @@ MAX_QUERY_FRAMES = 16
 SEARCH_INITIAL_MULTIPLIER = 4
 SEARCH_CANDIDATE_MULTIPLIER = 64
 MAX_SEARCH_CANDIDATES = 20000
+# Cuantas similitudes (fotos distintas) se loguean aunque no superen el umbral.
+TOP_SIMILARITY_LOG_LIMIT = 5
 
 # Caras de la webcam: el jugador esta cerca, asi que se descartan detecciones
 # chicas o dudosas (gente de fondo) antes de elegir la cara principal.
@@ -53,20 +57,13 @@ _artifact_cache = {
 }
 
 
-def _normalize_path(path):
-    return os.path.abspath(os.path.normpath(path))
+class IndexStaleError(ValueError):
+    """El indice en disco no se puede usar para buscar. ``reason`` va al resultado
+    ``index_stale``; el mensaje ya viene en espanol para el operador."""
 
-
-def _resolve_index_dir(data):
-    runtime = (data or {}).get("__runtime", {})
-    index_dir = runtime.get("indexDir")
-    if index_dir:
-        return _normalize_path(index_dir)
-
-    app_data_path = runtime.get("appDataPath")
-    if not app_data_path:
-        raise ValueError("Missing runtime indexDir/appDataPath for find_player action.")
-    return _normalize_path(os.path.join(app_data_path, "face-index"))
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
 
 
 def _artifact_signature(path):
@@ -130,12 +127,26 @@ def _load_search_artifacts(index_path, vectors_path, manifest_path):
             "hit",
         )
 
-    index = load_index(index_path)
+    try:
+        index = load_index(index_path)
+    except ValueError as error:
+        raise IndexStaleError(
+            "index_unreadable",
+            "No se pudo leer el indice de caras ({error}). Anda a Fotos y presiona "
+            "'Actualizar fotos'.".format(error=error),
+        ) from error
     vectors = load_json_file(vectors_path, None)
     if not isinstance(vectors, list):
-        raise ValueError("vectors.json has invalid format. Re-run index_photos.")
+        raise IndexStaleError(
+            "invalid_vectors",
+            "El archivo de vectores esta danado. Anda a Fotos y presiona 'Actualizar fotos'.",
+        )
     if index.ntotal != len(vectors):
-        raise ValueError("FAISS index and vectors.json are out of sync. Re-run index_photos.")
+        raise IndexStaleError(
+            "index_out_of_sync",
+            "El catalogo de caras quedo desincronizado (el indice y los vectores no "
+            "coinciden). Anda a Fotos y presiona 'Actualizar fotos'.",
+        )
 
     vectors_by_id = _build_vector_lookup(vectors)
     manifest = load_json_file(manifest_path, {}) if manifest_signature else {}
@@ -372,6 +383,7 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
             "indexSize": int(index.ntotal),
             "uniquePhotos": unique_photo_count,
             "stopReason": "no_indexed_photos",
+            "topSimilarities": [],
         }
 
     search_size = min(
@@ -379,6 +391,7 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
         max(DEFAULT_MAX_RESULTS, result_limit * SEARCH_INITIAL_MULTIPLIER),
     )
     matches = []
+    top_similarities = []
     stop_reason = "search_limit_reached"
 
     while search_size > 0:
@@ -388,6 +401,13 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
         matches = _unique_matches(
             indices_row, distances_row, vectors_by_id, threshold, result_limit
         )
+        # Mejores similitudes sin filtrar por umbral: para calibrar, no para mostrar.
+        top_similarities = [
+            round(row["similarity"], 4)
+            for row in _unique_matches(
+                indices_row, distances_row, vectors_by_id, -1.0, TOP_SIMILARITY_LOG_LIMIT
+            )
+        ]
         valid_distances = [
             float(distance)
             for vector_id, distance in zip(indices_row, distances_row)
@@ -414,6 +434,7 @@ def _search_unique_matches(index, query, vectors, vectors_by_id, threshold, max_
         "indexSize": int(index.ntotal),
         "uniquePhotos": int(unique_photo_count),
         "stopReason": stop_reason,
+        "topSimilarities": top_similarities,
     }
 
 
@@ -444,25 +465,29 @@ def _merge_expanded_matches(matches, expanded_matches, limit):
     return ordered[:limit]
 
 
+def _log_match_calibration(threshold, search_summary, matches_count, frames_used, frames_total):
+    """Una linea con las mejores similitudes, aunque no superen el umbral."""
+    top = ",".join("{:.4f}".format(value) for value in search_summary.get("topSimilarities", []))
+    sys.stderr.write(
+        "[face-calibration] find_player umbral={thr:.2f} top=[{top}] "
+        "coincidencias={count} frames={used}/{total}\n".format(
+            thr=threshold,
+            top=top,
+            count=matches_count,
+            used=frames_used,
+            total=frames_total,
+        )
+    )
+
+
 def find_player(data, _request_id):
     data = data or {}
     threshold = _resolve_threshold(data)
     max_results = _resolve_max_results(data)
     use_query_expansion = bool(data.get("queryExpansion", False))
 
-    index_dir = _resolve_index_dir(data)
-    index_path = os.path.join(index_dir, "faces.faiss")
-    vectors_path = os.path.join(index_dir, "vectors.json")
-    manifest_path = os.path.join(index_dir, "photos_manifest.json")
-
-    if not os.path.exists(index_path) or not os.path.exists(vectors_path):
-        return _empty_result(
-            "empty_index",
-            "missing_artifacts",
-            "Face index artifacts are missing. Run index_photos first.",
-            threshold=threshold,
-            maxResults=max_results,
-        )
+    index_dir = resolve_index_dir(data, "find_player")
+    index_path, vectors_path, manifest_path = index_artifact_paths(index_dir)
 
     try:
         index, vectors, vectors_by_id, index_embedding_model, artifact_cache_status = (
@@ -472,7 +497,15 @@ def find_player(data, _request_id):
         return _empty_result(
             "empty_index",
             "missing_artifacts",
-            "Face index artifacts were removed while loading. Run index_photos first.",
+            "Face index artifacts are missing. Run index_photos first.",
+            threshold=threshold,
+            maxResults=max_results,
+        )
+    except IndexStaleError as error:
+        return _empty_result(
+            "index_stale",
+            error.reason,
+            str(error),
             threshold=threshold,
             maxResults=max_results,
         )
@@ -522,6 +555,7 @@ def find_player(data, _request_id):
         index, query, vectors, vectors_by_id, threshold, max_results
     )
     search_summary["cacheStatus"] = artifact_cache_status
+    _log_match_calibration(threshold, search_summary, len(matches), frames_used, frames_total)
 
     search_summary["queryExpansionNeighbors"] = 0
     if use_query_expansion and matches:
